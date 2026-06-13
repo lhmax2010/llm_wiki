@@ -1,6 +1,6 @@
 # Phase 1 Review Prompt
 
-PR: pending
+PR: https://github.com/lhmax2010/llm_wiki/pull/1
 Risk: High
 Review routing: Claude + ChatGPT + Kimi
 
