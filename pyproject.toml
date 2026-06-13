@@ -1,0 +1,62 @@
+[project]
+name = "unified-kb"
+version = "0.1.0"
+description = "Unified Knowledge Base: shared content core for humans and agents."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "mypy>=1.18.2",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+pretty = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "--cov=core",
+    "--cov=governed-api",
+    "--cov=mcp",
+    "--cov=collector",
+    "--cov=index",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+fail_under = 80

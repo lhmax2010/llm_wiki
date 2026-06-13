@@ -1,0 +1,3 @@
+{"canonical": "花屏", "synonyms": ["画面撕裂", "绿屏", "解码异常", "colorspace错误", "画面错乱"]}
+{"canonical": "卡顿", "synonyms": ["掉帧", "播放掉帧", "偶尔卡顿", "画面闪烁", "不流畅"]}
+{"canonical": "崩溃", "synonyms": ["crash", "段错误", "segfault", "异常退出", "core dump"]}

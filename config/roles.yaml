@@ -1,0 +1,32 @@
+# RBAC 角色配置（design §4.2.3）
+# 角色变更 = 改本文件 + 重启服务（V1 无管理 UI）
+# 团队 ≤20 人，信任度高，核心目的是"防呆"非"防谍"
+
+roles:
+  reader:
+    - read_published
+  contributor:
+    - read_published
+    - create_research
+    - edit_own_research
+    - propose_entry
+    - promote_research_to_draft
+  reviewer:
+    - read_published
+    - read_research
+    - read_draft
+    - review_light
+    - review_heavy
+    - publish_entry
+    - deprecate_entry
+    - manage_tags
+    - search_research_for_hints
+  admin:
+    - "*"
+
+# 用户→角色映射（内网硬编码，占位示例，开发者填实际人员标识）
+users:
+  # user-id-placeholder-1: reviewer
+  # user-id-placeholder-2: contributor
+  # kona-agent: contributor       # agent 接入用，注意 agent 不能 create/update research
+  {}
