@@ -7,14 +7,15 @@
 > **评审历程**：KB 线经 Kona 三轮 + 三方两轮冻结为 v5；合并线经三方三轮 + Kona 两轮收敛；本文档定稿后经三方交付前 review（v1.0→v1.1）。
 >
 > **v1.1 变更**：开发语言定 Python / Phase DAG 修 3 处依赖 bug / 补 §4.4 类型定义 / ID SQLite 发号 / collector 闭环 / 口径统一 / OPEN 整理。
-> **v1.2 变更（FROZEN，整合 v1.1 复审）**：§4.4 类型 total=False→Required/NotRequired + 补外围类型（HTTP 请求体/middleware/RolesConfig/EntryUpdate）/ SQLite 发号重建策略（扫 entries 取 max + 允许空洞）/ classify_write_route 决策规则形式化 / schema_version=3 说明 / P3 research stub 说明。三方一致无 BLOCKER，冻结交付 Codex。
+> **v1.2 变更（FROZEN，整合 v1.1 复审）**：§4.4 类型 Required/NotRequired + 外围类型 / SQLite 发号重建 / classify_write_route 形式化 / schema_version 说明 / P3 stub。
+> **v1.3 变更（Phase 1 设计 Review change_1，5 项）**：① ID 口径统一为 SQLite 发号（去 git-derived 残留）② CodeBinding 补 symbol_hashes/build_config_hash/symbol_resolution（对齐 hash_spec）③ SQLite 重建扫描纳入 deprecated/ ④ observation 证据精确到 EvidenceType ⑤ Phase 1 code_binding 只校验字段形状不算真实 hash（clangd 计算留健康检查脚本）。
 
 ---
 
 ## 0. 元信息
 
-- 版本：v1.2
-- 创建时间：2026-06-12（v1.2：2026-06-13，FROZEN）
+- 版本：v1.3
+- 创建时间：2026-06-12（v1.2：2026-06-13 FROZEN；v1.3：2026-06-13，Phase 1 设计 Review change_1）
 - 状态：**Frozen**
 - 一旦标记为 Frozen，开发期间不得修改。改设计走 R1 流程。
 - 一旦标记为 Frozen，开发期间不得修改。改设计走 R1 流程（建 `docs/design_changes/change_N.md` 提案 → 用户确认 → 用户本人改并升版本）。
@@ -213,7 +214,7 @@ Kona opt-in research: search_research_for_hints（独立工具）→ research_si
 **条目 schema（共享元数据，KB v5 继承）**：
 ```yaml
 ---
-id: KB-2026-0142            # KB-{年}-{NNNN}，SQLite 发号（§4.2.1）
+id: KB-2026-0142            # KB-{年}-{NNNN}，SQLite 统一发号（§4.2.1，非 git-derived）
 schema_version: 3           # 继承自 KB v5（v1→v2→v3），v1.x 直接用 v3，无历史迁移逻辑
 entry_type: defect_case    # defect_case/triage_rule/code_flow/log_baseline
 title: ...
@@ -293,7 +294,7 @@ browse(module, entry_type?): {...}
 
 // 写（提案制）
 propose_entry(draft, credibility, request_id): {
-  proposed_id,                          // git-derived
+  proposed_id,                          // SQLite 发号（§4.2.1）
   status: "pending",                    // 新建必审，不返回 auto_published
   validation_errors?, validation_warnings?, missing_fields?, open_questions?, possible_duplicates?
 }
@@ -334,7 +335,7 @@ POST /api/search/nl                   # 🟢 自然语言搜索（v1.1 改名，
 | claim_type | 必须证据 | 不符 |
 |-----------|---------|------|
 | fact | log/repro/spec | 降级 observation + warning |
-| observation | 观测记录 | 降级 llm_hypothesis + warning |
+| observation | log/repro/ticket/human_note/attachment（任一，满足字段条件）| 降级 llm_hypothesis + warning |
 | static_inference | code ref | 打回 |
 | historical_pattern | historical_entry | 降级 llm_hypothesis + warning |
 | llm_hypothesis | 无 | — |
@@ -359,7 +360,8 @@ request → auth_context → schema_validate → evidence_validate
 V1 不做：复杂 RBAC policy engine / 动态工作流配置 / 可视化规则编辑器 / 复杂审计查询。
 
 🟢 **ID 并发安全（v1.1+v1.2）**：ID 形如 `KB-{年}-{NNNN}`，并发写入不能从无状态 git 扫描取号（race condition）。**由 SQLite 统一发号保唯一**（持久化自增序列），拿号后写 git markdown。persist 顺序：SQLite 发号 → 写 git → 更新索引。
-- **重建/冷启动策略（v1.2，三方）**：SQLite 发号序列**不是可从 git 无损重建的派生状态**（max_id 可推导，但已分配空洞不可恢复）。规则：① 服务初始化/SQLite 重建时，扫描 `entries/`+`staging/`+`drafts/` 解析已有 ID，取 max NNNN +1 初始化发号种子；② **唯一性优先于连续性**，允许空洞（写 git 失败的号烧掉不复用，工程上可接受）；③ git 仍是内容 SSOT，SQLite 是内容索引（可重建）+ 发号器（运行时元数据，按①初始化）。
+- **重建/冷启动策略（v1.2+v1.3）**：SQLite 发号序列**不是可从 git 无损重建的派生状态**（max_id 可推导，但已分配空洞不可恢复）。规则：① 服务初始化/SQLite 重建时，扫描**所有含正式 ID 的目录** `entries/`+`staging/`+`drafts/`+`deprecated/`（v1.3：补 deprecated，否则最高 ID 在 deprecated 时重建后会重复发号）解析已有 ID，取 max NNNN +1 初始化发号种子；② **唯一性优先于连续性**，允许空洞（写 git 失败的号烧掉不复用）；③ git 仍是内容 SSOT，SQLite 是内容索引（可重建）+ 发号器（运行时元数据，按①初始化）。
+  > research/ 不纳入正式 ID 扫描（research 用独立标识，转正式时才经 promote 走 SQLite 发号）。
 
 🟢 **classify_write_route 决策规则（v1.2，形式化 §7.2 编辑分级，Codex 实现依据）**：
 ```
@@ -498,9 +500,12 @@ class CodeBinding(TypedDict, total=False):
     repo_id: str
     git_sha: str
     paths: list[str]
-    path_hashes: dict[str, str]
+    path_hashes: dict[str, str]          # {相对路径: SHA-256}
     symbols: list[str]
-    build_config_id: str
+    symbol_hashes: dict[str, str]        # {符号名: SHA-256}（v1.3，对齐 hash_spec）
+    symbol_resolution: Literal["clangd","tree_sitter","fallback_path"]  # v1.3：解析精度标记
+    build_config_id: str                 # 人可读别名
+    build_config_hash: str               # 16 位 hex（v1.3，机器比对用）
     stale: bool
     stale_reason: Optional[str]
 
@@ -740,9 +745,9 @@ flowchart LR
 ### Phase 1: 内容核 + schema + 校验
 - **目标**：结构化 entry 的 schema 定义 + 纯代码校验 + git/markdown 存储
 - **依赖**：无
-- **范围**：四类 entry_type schema、段落骨架、evidence 强类型、证据映射规则、存在性校验、git-derived ID、三态物理目录骨架
+- **范围**：四类 entry_type schema、段落骨架、evidence 强类型、证据映射规则、存在性校验、**SQLite 发号**（含重建扫 entries/staging/drafts/deprecated 取 max+1，允许空洞）、**code_binding 字段形状/格式校验（不计算真实 hash、不调 clangd/tree-sitter，真实 hash 计算 + stale 检测留健康检查脚本）**、三态物理目录骨架
 - **交付物**：content-core 模块 + schema 校验器 + UT
-- **DoD**：四类条目各能创建+校验通过 / evidence 纯代码校验（git ls-files）/ 证据映射降级打回规则 / 覆盖率达标 / R13 命令记录 / dev_memory / checkpoint / review prompt / PR / R14 闭环
+- **DoD**：四类条目各能创建+校验通过 / evidence 纯代码校验（git ls-files）/ 证据映射降级打回规则 / SQLite 发号唯一性（含重建）/ code_binding 字段形状校验 / 三态目录与 trust_state 一致性（不符 E_SCHEMA）/ 覆盖率达标 / R13 命令记录 / dev_memory / checkpoint / review prompt / PR / R14 闭环
 - **预估代码量**：~600 行
 
 ### Phase 2: Governed API pipeline

@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
+.coverage
+htmlcov/
 .env
 config.local.*
 poetry.lock.bak

@@ -4,4 +4,4 @@
 
 | Phase | 状态 | memory 文件 | 一句话摘要 |
 |-------|------|------------|-----------|
-| （待 Phase 1 开始填） | | | |
+| Phase 1 | implemented, review pending | `docs/dev_memory/phase_1_memory.md` | Content-core schema, validation, SQLite ID allocator, and markdown storage implemented with 96.01% core coverage. |
