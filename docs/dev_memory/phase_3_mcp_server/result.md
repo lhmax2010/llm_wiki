@@ -24,7 +24,7 @@
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/3
 - 对应 Git Commit：
   - `fafa107` - `[Phase 3] mcp server wrapper`
-  - R14 fix commit：待提交
+  - `917d438` - `[Phase 3] fix: R14 id path guard and MCP robustness`
 
 ## Review 状态
 
