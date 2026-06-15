@@ -8,12 +8,11 @@ from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 
+import yaml  # type: ignore[import-untyped]
+
 ID_PATTERN = re.compile(r"\bKB-(?P<year>\d{4})-(?P<number>\d{4})\b")
-FRONTMATTER_ID_PATTERN = re.compile(
-    r"(?m)^id:\s*[\"']?(?P<id>KB-(?P<year>\d{4})-(?P<number>\d{4}))[\"']?\s*$"
-)
 ID_STATE_DIRS = ("entries", "staging", "drafts", "deprecated")
-FRONTMATTER_MARKER = "---\n"
+FRONTMATTER_MARKER = "---"
 MIN_YEAR = 1000
 MAX_YEAR = 9999
 MAX_ID_NUMBER = 9999
@@ -130,13 +129,29 @@ def _extract_frontmatter_id(path: Path) -> str | None:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(f"entry frontmatter is not valid UTF-8: {path}") from exc
-    if not text.startswith(FRONTMATTER_MARKER):
+    frontmatter = _frontmatter_text(text)
+    if frontmatter is None:
         return None
-    parts = text.split(FRONTMATTER_MARKER, 2)
-    if len(parts) < 3:
+    try:
+        metadata = yaml.safe_load(frontmatter) or {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"entry frontmatter YAML is invalid: {path}") from exc
+    if not isinstance(metadata, dict):
+        raise ValueError(f"entry frontmatter must be a YAML mapping: {path}")
+    entry_id = metadata.get("id")
+    if not isinstance(entry_id, str):
         return None
-    match = FRONTMATTER_ID_PATTERN.search(parts[1])
-    return None if match is None else match.group("id")
+    return entry_id
+
+
+def _frontmatter_text(text: str) -> str | None:
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != FRONTMATTER_MARKER:
+        return None
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == FRONTMATTER_MARKER:
+            return "\n".join(lines[1:index])
+    return None
 
 
 def _validate_year(year: int) -> None:

@@ -60,6 +60,43 @@ def test_rebuild_ignores_referenced_ids_outside_frontmatter_id(tmp_path: Path) -
     assert allocator.allocate(2026) == "KB-2026-0003"
 
 
+def test_rebuild_reads_yaml_quoted_id_with_comment(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    path = kb_root / "entries" / "entry.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('---\nid: "KB-2026-0042" # existing entry\n---\nbody\n', encoding="utf-8")
+
+    allocator = IDAllocator(kb_root / "indexes" / "ids.sqlite")
+    seeds = allocator.rebuild_from_kb(kb_root)
+
+    assert seeds == {2026: 43}
+    assert allocator.allocate(2026) == "KB-2026-0043"
+
+
+def test_rebuild_reads_crlf_frontmatter(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    path = kb_root / "entries" / "entry.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"---\r\nid: KB-2026-0042\r\n---\r\nbody\r\n")
+
+    allocator = IDAllocator(kb_root / "indexes" / "ids.sqlite")
+    seeds = allocator.rebuild_from_kb(kb_root)
+
+    assert seeds == {2026: 43}
+    assert allocator.allocate(2026) == "KB-2026-0043"
+
+
+def test_rebuild_fails_on_malformed_yaml_frontmatter(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    path = kb_root / "entries" / "bad.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("---\nid: [KB-2026-0042\n---\nbody\n", encoding="utf-8")
+    allocator = IDAllocator(kb_root / "indexes" / "ids.sqlite")
+
+    with pytest.raises(ValueError, match="YAML is invalid"):
+        allocator.rebuild_from_kb(kb_root)
+
+
 def test_rebuild_fails_on_non_utf8_entry_file(tmp_path: Path) -> None:
     kb_root = tmp_path / "kb"
     path = kb_root / "entries" / "bad.md"

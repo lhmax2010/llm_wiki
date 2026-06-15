@@ -2,7 +2,7 @@
 
 ## 最终状态
 
-待 Review。Phase 1 代码已完成并推送到当前 PR 分支，PR 已创建；仍在高风险三路 review 闭环中，尚未 merge，尚未打 checkpoint tag。
+待 Review。Phase 1 代码已完成并推送到当前 PR 分支，PR 已创建；四路 review 的合并前 BLOCKER/MAJOR/MINOR 修复项已处理，仍待复核和 merge，尚未打 checkpoint tag。
 
 ## 测试情况
 
@@ -11,12 +11,12 @@
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests` -> `Success: no issues found in 10 source files`
 - 单测 + 覆盖率：
-  - `uv run pytest -q` -> `38 passed in 2.62s`
-  - Total coverage: `96.01%`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `47 passed in 4.75s`
+  - Total coverage: `96.80%`
   - touched core files coverage snapshot:
     - `core/__init__.py`: `100%`
     - `core/errors.py`: `100%`
-    - `core/id_allocator.py`: `92%`
+    - `core/id_allocator.py`: `89%`
     - `core/models.py`: `100%`
     - `core/storage.py`: `91%`
     - `core/validation.py`: `96%`
@@ -35,7 +35,7 @@
 
 - Claude 本地 read-only review：已完成。高/中风险发现已修复，最终复核结论为无 remaining correctness blockers / high / medium issues。
 - Codex 本地 review：已尝试 `codex review --uncommitted`，但 Windows sandbox 阻塞，错误为 `CreateProcessWithLogonW failed: 1385`，不能视为通过。
-- ChatGPT/Kimi：待用户外发 PR diff 后回收 findings。
+- 四路 review R14：FIX-1 到 FIX-6 已修复并补测试；其余低风险项已记入 `progress.md` TODO。
 
 ## 遗留问题 / 风险
 
@@ -50,4 +50,3 @@
 - 完成 Phase 1 ChatGPT/Kimi 外发 review，按 R14 处理 BLOCKER/MAJOR/MINOR。
 - Phase 1 merge 后更新 `result.md` 状态和 `docs/dev_memory/INDEX.md`，再打 checkpoint tag。
 - Phase 2：Governed API middleware pipeline，包括 auth_context、schema_validate、evidence_validate、classify_write_route、review_route、audit_append。
-

@@ -59,4 +59,38 @@
 - [2026-06-13] `codex review --uncommitted` 受 Windows sandbox `CreateProcessWithLogonW failed: 1385` 阻塞，记录为未通过本地 Codex review。
 - [2026-06-13] 创建 PR https://github.com/lhmax2010/llm_wiki/pull/1，等待 ChatGPT/Kimi 外发 review 和 R14 闭环。
 - [2026-06-15] 按新版 SOP 把单文件 dev_memory 重组成 `plan.md` / `progress.md` / `result.md` 三件套。
+- [2026-06-15] 按四路 review 的 R14 修复清单闭环 FIX-1 到 FIX-6，并补对应失败测试。
 
+## R14 修复记录
+
+- FIX-1【BLOCKER】：`repo_root=None` 时证据存在性不再静默跳过。
+  - 修复思路：当 `check_evidence_exists=True` 且 entry/section evidence 中存在可检查目标（`code.filepath`、`log.attachment_id`、`attachment.attachment_id`）但调用方未传 `repo_root`，直接返回 `E_SCHEMA(repo_root)`。这样默认校验路径不会把缺失文件误判为通过。
+  - 测试：`test_evidence_existence_requires_repo_root_by_default` 覆盖默认调用 `validate_entry(entry)`。
+
+- FIX-2【BLOCKER】：SQLite rebuild 改用 YAML frontmatter 解析 ID。
+  - 修复思路：删除正则解析 frontmatter ID 的依赖，改为提取 frontmatter 后 `yaml.safe_load()`，再读取 `id` 字段。合法 YAML 的引号、行尾注释、CRLF 都能识别；非 UTF-8、非法 YAML、非 mapping frontmatter fail-loud 抛 `ValueError`，避免漏扫后重复发号。
+  - 测试：`test_rebuild_reads_yaml_quoted_id_with_comment`、`test_rebuild_reads_crlf_frontmatter`、`test_rebuild_fails_on_malformed_yaml_frontmatter`。
+
+- FIX-3【MAJOR】：三态目录 fallback 拒绝 `..` traversal。
+  - 修复思路：`entry_path` 未传 `kb_root` 时不再直接信任未解析的 `path.parts`；只要路径包含 `..`，直接返回 `E_SCHEMA(entry_path)`。这阻止 `kb/entries/../research/x.md` 伪装成 published 路径。
+  - 测试：`test_directory_state_rejects_traversal_without_kb_root`。
+
+- FIX-4【MINOR】：纯继承 section 不重复跑证据映射。
+  - 修复思路：section 只有自己声明 `claim_type` 或 `evidence` 时才执行 `_normalize_credibility()`。只声明 `support_strength` 的 section 继续继承 entry 级 claim/evidence，不重复制造 `W_DOWNGRADE` 或 `E_EVIDENCE_MISSING`。
+  - 测试：`test_pure_inherited_section_does_not_repeat_mapping_errors`。
+
+- FIX-5【MINOR】：code evidence 用 literal pathspec，并确认单个 regular file。
+  - 修复思路：`git ls-files` 改用 `:(literal)<path>`，禁止 pathspec glob/magic 把 `src/*.c` 匹配成其他文件；同时要求输出恰好等于 evidence filepath，且工作区中对应路径是 regular file。
+  - 测试：`test_code_evidence_uses_literal_pathspec_not_glob`、`test_code_evidence_directory_path_is_not_a_file`。
+
+- FIX-6【MINOR】：按 design v1.4 放宽正文额外 heading。
+  - 修复思路：正文 heading 只要求包含 entry_type 的核心骨架段落，不再因骨架外额外 heading 返回 `E_SCHEMA`；`section_credibility` key 仍必须属于骨架，且若 key 指向骨架段落但正文缺失该段落仍打回。
+  - 测试：`test_body_skeleton_reports_missing_and_allows_extra_headings`、`test_body_skeleton_accepts_extra_headings_when_core_headings_exist`，原有 unknown section_credibility key 测试保留。
+
+## R14 TODO
+
+- created/updated ISO8601 格式校验。
+- 4+ 反引号围栏边角、frontmatter 内 `---` 切分。
+- 发号年份口径：当前默认 UTC；后续明确要求调用方传 year，或文档注明 UTC 口径。
+- 补测试缺口：跨年发号独立序列、section 全空继承。
+- NIT：WAL pragma 重复设置、TrustState 多余转换、Evidence docstring 说明应指向 validation 而非 model validator。

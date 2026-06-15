@@ -73,6 +73,8 @@ def validate_entry(
 
     normalized.credibility = _normalize_credibility(normalized.credibility, "credibility", report)
     for heading, section in normalized.section_credibility.items():
+        if section.claim_type is None and section.evidence is None:
+            continue
         effective = _section_effective_credibility(normalized.credibility, section)
         mapped = _normalize_credibility(effective, f"section_credibility.{heading}", report)
         if section.claim_type is not None or section.evidence is not None:
@@ -83,8 +85,17 @@ def validate_entry(
             section.evidence = mapped.evidence
 
     _validate_evidence_shapes(normalized, report)
-    if check_evidence_exists and repo_root is not None:
-        _validate_evidence_existence(normalized, repo_root, report)
+    if check_evidence_exists:
+        if repo_root is None and _has_evidence_targets_to_check(normalized):
+            report.errors.append(
+                ValidationIssue(
+                    IssueCode.E_SCHEMA,
+                    "repo_root",
+                    "repo_root is required when evidence existence checks are enabled",
+                )
+            )
+        elif repo_root is not None:
+            _validate_evidence_existence(normalized, repo_root, report)
 
     return report
 
@@ -140,7 +151,6 @@ def _validate_body_skeleton(entry: Entry, report: ValidationReport) -> None:
     expected_set = set(expected)
 
     missing = [heading for heading in expected if heading not in actual_set]
-    unknown = [heading for heading in actual if heading not in expected_set]
     duplicates = _duplicates(actual)
 
     for heading in missing:
@@ -150,10 +160,6 @@ def _validate_body_skeleton(entry: Entry, report: ValidationReport) -> None:
                 "body",
                 f"missing required section heading: {heading}",
             )
-        )
-    for heading in unknown:
-        report.errors.append(
-            ValidationIssue(IssueCode.E_SCHEMA, "body", f"unknown section heading: {heading}")
         )
     for heading in duplicates:
         report.errors.append(
@@ -185,6 +191,15 @@ def _validate_directory_state(
     report: ValidationReport,
 ) -> None:
     if entry_path is None:
+        return
+    if ".." in entry_path.parts:
+        report.errors.append(
+            ValidationIssue(
+                IssueCode.E_SCHEMA,
+                "entry_path",
+                "entry_path must not contain traversal segments",
+            )
+        )
         return
     state = trust_state_for_path(entry_path, kb_root) if kb_root is not None else None
     if state is None:
@@ -471,19 +486,31 @@ def _iter_evidence(entry: Entry) -> list[tuple[str, list[Evidence]]]:
     return evidence_sets
 
 
+def _has_evidence_targets_to_check(entry: Entry) -> bool:
+    return any(
+        (item.type == EvidenceType.CODE and bool(item.filepath))
+        or (item.type in {EvidenceType.LOG, EvidenceType.ATTACHMENT} and bool(item.attachment_id))
+        for _, evidence in _iter_evidence(entry)
+        for item in evidence
+    )
+
+
 def _git_tracks_file(root: Path, filepath: str, cache: dict[str, bool]) -> bool:
     if filepath in cache:
         return cache[filepath]
     if not _is_relative_posix_path(filepath):
         cache[filepath] = False
         return False
+    pathspec = f":(literal){filepath}"
     result = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", filepath],
+        ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", pathspec],
         capture_output=True,
         text=True,
         check=False,
     )
-    cache[filepath] = result.returncode == 0
+    tracked_paths = [line.strip().replace("\\", "/") for line in result.stdout.splitlines()]
+    candidate = root.joinpath(*filepath.split("/"))
+    cache[filepath] = result.returncode == 0 and tracked_paths == [filepath] and candidate.is_file()
     return cache[filepath]
 
 

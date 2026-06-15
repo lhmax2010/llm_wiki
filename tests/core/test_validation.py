@@ -65,16 +65,28 @@ def test_section_credibility_unknown_heading_is_schema_error(
     assert _has_issue(report.errors, IssueCode.E_SCHEMA, "section_credibility.unknown-section")
 
 
-def test_body_skeleton_reports_missing_and_unknown_headings(
+def test_body_skeleton_reports_missing_and_allows_extra_headings(
     make_entry: Callable[..., Entry],
 ) -> None:
-    entry = make_entry(body="## 现象\nok\n\n## unknown-section\nextra\n")
+    first_heading = headings_for_entry_type(EntryType.DEFECT_CASE)[0]
+    entry = make_entry(body=f"## {first_heading}\nok\n\n## unknown-section\nextra\n")
 
     report = validate_entry(entry, check_evidence_exists=False)
 
     assert _has_issue(report.errors, IssueCode.E_SCHEMA, "body")
     assert any("missing required section heading" in issue.message for issue in report.errors)
-    assert any("unknown section heading" in issue.message for issue in report.errors)
+    assert not any("unknown section heading" in issue.message for issue in report.errors)
+
+
+def test_body_skeleton_accepts_extra_headings_when_core_headings_exist(
+    make_entry: Callable[..., Entry],
+) -> None:
+    entry = make_entry()
+    entry.body = f"{entry.body}\n\n## unknown-section\nextra\n"
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    assert report.ok, report.errors
 
 
 def test_body_skeleton_ignores_headings_inside_fenced_code(
@@ -204,6 +216,25 @@ def test_section_local_evidence_materializes_downgraded_inherited_claim(
     assert _has_issue(report.warnings, IssueCode.W_DOWNGRADE, "section_credibility.根因")
 
 
+def test_pure_inherited_section_does_not_repeat_mapping_errors(
+    make_entry: Callable[..., Entry],
+) -> None:
+    heading = headings_for_entry_type(EntryType.DEFECT_CASE)[0]
+    entry = make_entry(
+        claim_type="static_inference",
+        evidence=[{"type": "human_note", "excerpt": "not code evidence"}],
+        section_credibility={heading: {"support_strength": "weak"}},
+    )
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    evidence_errors = [
+        issue for issue in report.errors if issue.code == IssueCode.E_EVIDENCE_MISSING
+    ]
+    assert len(evidence_errors) == 1
+    assert evidence_errors[0].field == "credibility.evidence"
+
+
 def test_observation_without_observation_evidence_downgrades_to_llm_hypothesis(
     make_entry: Callable[..., Entry],
 ) -> None:
@@ -322,6 +353,17 @@ def test_directory_state_accepts_path_relative_to_kb_root(
     assert report.ok
 
 
+def test_directory_state_rejects_traversal_without_kb_root(
+    make_entry: Callable[..., Entry],
+) -> None:
+    entry = make_entry(trust_state="published")
+    entry_path = Path("kb") / "entries" / ".." / "research" / "KB-2026-0001.md"
+
+    report = validate_entry(entry, entry_path=entry_path, check_evidence_exists=False)
+
+    assert _has_issue(report.errors, IssueCode.E_SCHEMA, "entry_path")
+
+
 def test_trust_state_for_path_maps_kb_state_dirs(tmp_path: Path) -> None:
     kb_root = tmp_path / "kb"
     assert trust_state_for_path(kb_root / "entries" / "a.md", kb_root) == "published"
@@ -371,6 +413,22 @@ def test_missing_evidence_targets_are_errors(
     assert _has_issue(report.errors, IssueCode.E_EVIDENCE_NOT_FOUND, "attachment_id")
 
 
+def test_evidence_existence_requires_repo_root_by_default(
+    make_entry: Callable[..., Entry],
+) -> None:
+    entry = make_entry(
+        claim_type="fact",
+        evidence=[
+            {"type": "code", "filepath": "src/missing.c"},
+            {"type": "log", "attachment_id": "missing.log"},
+        ],
+    )
+
+    report = validate_entry(entry)
+
+    assert _has_issue(report.errors, IssueCode.E_SCHEMA, "repo_root")
+
+
 def test_code_evidence_existence_requires_git_repo(
     tmp_path: Path, make_entry: Callable[..., Entry]
 ) -> None:
@@ -386,6 +444,42 @@ def test_code_evidence_existence_requires_git_repo(
 
     assert _has_issue(report.errors, IssueCode.E_SCHEMA, "repo_root")
     assert not _has_issue(report.errors, IssueCode.E_EVIDENCE_NOT_FOUND, "filepath")
+
+
+def test_code_evidence_uses_literal_pathspec_not_glob(
+    tmp_path: Path, make_entry: Callable[..., Entry]
+) -> None:
+    _git(["init"], tmp_path)
+    source = tmp_path / "src" / "decoder.c"
+    source.parent.mkdir()
+    source.write_text("int decode(void) { return 0; }\n", encoding="utf-8")
+    _git(["add", "src/decoder.c"], tmp_path)
+    entry = make_entry(
+        claim_type="static_inference",
+        evidence=[{"type": "code", "filepath": "src/*.c"}],
+    )
+
+    report = validate_entry(entry, repo_root=tmp_path)
+
+    assert _has_issue(report.errors, IssueCode.E_EVIDENCE_NOT_FOUND, "filepath")
+
+
+def test_code_evidence_directory_path_is_not_a_file(
+    tmp_path: Path, make_entry: Callable[..., Entry]
+) -> None:
+    _git(["init"], tmp_path)
+    source = tmp_path / "src" / "decoder.c"
+    source.parent.mkdir()
+    source.write_text("int decode(void) { return 0; }\n", encoding="utf-8")
+    _git(["add", "src/decoder.c"], tmp_path)
+    entry = make_entry(
+        claim_type="static_inference",
+        evidence=[{"type": "code", "filepath": "src"}],
+    )
+
+    report = validate_entry(entry, repo_root=tmp_path)
+
+    assert _has_issue(report.errors, IssueCode.E_EVIDENCE_NOT_FOUND, "filepath")
 
 
 def test_invalid_id_and_evidence_payload_shapes(make_entry: Callable[..., Entry]) -> None:
