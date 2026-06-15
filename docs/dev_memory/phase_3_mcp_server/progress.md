@@ -75,4 +75,5 @@
 - search 子目录：P3 当前 flat `.md` 扫描，后续若 entries 分层再改 `rglob` 或文档化目录约束。
 - MCP `inputSchema` 当前 `additionalProperties: true`，后续补严格 JSON Schema。
 - `possible_duplicates` / `E_DUP` 当前恒空，后续 Phase 补重复检测。
+- `_require` 里的 `if not role` 是死代码：`permissions_for_user()` 已保证 role 非 None，后续清理。
 - NIT：`_require` 里 `read_published` 占位、读写鉴权语义一致性、`SearchResult.stale` 是 P3 扩展需后续文档化。
