@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -538,6 +539,46 @@ def test_audit_failure_rolls_back_persisted_entry(
     assert result["error"] is not None
     assert result["error"].field == "audit_path"
     assert not (context["kb_root"] / "staging" / "KB-2026-0001.md").exists()
+
+
+def test_audit_failure_logs_when_rollback_unlink_fails(
+    make_context: Callable[..., MiddlewareContext],
+    roles_config: RolesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    def fail_append(*args: object, **kwargs: object) -> None:
+        raise PermissionError("audit blocked")
+
+    def fail_unlink(self: Path) -> None:
+        raise OSError("file locked")
+
+    monkeypatch.setattr("governed_api.middleware.append_audit_record", fail_append)
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+    caplog.set_level(logging.ERROR, logger="governed_api.middleware")
+    context = make_context(payload=entry_payload(entry_id=None, trust_state="pending"))
+
+    result = run_pipeline(
+        context,
+        [
+            auth_context(roles_config),
+            schema_validate(),
+            evidence_validate(),
+            classify_write_route(),
+            review_route(),
+            persist(),
+            audit_append(),
+        ],
+    )
+
+    orphan_path = context["kb_root"] / "staging" / "KB-2026-0001.md"
+    assert not result["ok"]
+    assert result["error"] is not None
+    assert result["error"].field == "audit_path"
+    assert orphan_path.exists()
+    assert "回滚失败" in caplog.text
+    assert str(orphan_path) in caplog.text
+    assert "file locked" in caplog.text
 
 
 def test_validation_failure_prevents_persist_and_audit(

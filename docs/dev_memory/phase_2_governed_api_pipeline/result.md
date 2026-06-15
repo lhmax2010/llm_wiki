@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 R14 复核。Phase 2 V1 Governed API pipeline 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-10），当前 PR #2 已更新，等待复核后 merge。
+待 Merge。Phase 2 V1 Governed API pipeline 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-10），并补充回滚失败告警；当前 PR #2 已更新，等待 merge。
 
 ## 测试情况
 
@@ -11,13 +11,13 @@
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests governed-api` -> `Success: no issues found in 24 source files`
 - 单测 + 覆盖率：
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `83 passed in 5.06s`
-  - Total coverage: `95.39%`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `85 passed in 4.95s`
+  - Total coverage: `95.49%`
   - touched governed-api coverage snapshot:
     - `governed-api/governed_api/__init__.py`: `100%`
     - `governed-api/governed_api/audit.py`: `92%`
     - `governed-api/governed_api/middleware.py`: `89%`
-    - `governed-api/governed_api/pipeline.py`: `96%`
+    - `governed-api/governed_api/pipeline.py`: `97%`
     - `governed-api/governed_api/roles.py`: `83%`
     - `governed-api/governed_api/types.py`: `100%`
 
@@ -28,12 +28,13 @@
   - `d942bae` - `[Phase 2] governed API middleware pipeline`
   - `bb1765f` - `[Phase 2] docs: add PR link`
   - `c2e0475` - `[Phase 2] fix: R14 governance trust boundary closure`
+  - 回滚失败告警收尾 commit：待提交
 
 ## Review 状态
 
 - 风险档：高风险。
 - 三路 review：Claude + ChatGPT + Kimi 已完成。
-- R14：FIX-1 到 FIX-10 已修复，等待复核确认。
+- R14：FIX-1 到 FIX-10 已修复；回滚失败告警补丁已补。
 - Review prompt：`docs/review/phase_2_review_prompt.md`
 
 ## 遗留问题 / 风险

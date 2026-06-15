@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 from governed_api.types import ApiError, Middleware, MiddlewareContext, MiddlewareResult, fail, ok
+
+LOGGER = logging.getLogger(__name__)
 
 
 def run_pipeline(context: MiddlewareContext, middleware: Iterable[Middleware]) -> MiddlewareResult:
@@ -31,4 +34,7 @@ def run_pipeline(context: MiddlewareContext, middleware: Iterable[Middleware]) -
 def _rollback_persisted_path(context: MiddlewareContext) -> None:
     path = context.get("persisted_path")
     if path is not None and path.exists() and "audit_record" not in context:
-        path.unlink()
+        try:
+            path.unlink()
+        except OSError as exc:
+            LOGGER.error("回滚失败: %s (%s) - orphaned unaudited entry", path, exc)

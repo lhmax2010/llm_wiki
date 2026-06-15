@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -23,6 +24,8 @@ from governed_api.types import (
     fail,
     ok,
 )
+
+LOGGER = logging.getLogger(__name__)
 
 PROVISIONAL_ID = "KB-1000-0000"
 CREATE_OPERATIONS = {"create", "propose", "propose_entry"}
@@ -511,4 +514,7 @@ def _api_error_from_validation_report(report: ValidationReport, message: str) ->
 def _rollback_persisted_entry(context: MiddlewareContext) -> None:
     path = context.get("persisted_path")
     if path is not None and path.exists():
-        path.unlink()
+        try:
+            path.unlink()
+        except OSError as exc:
+            LOGGER.error("回滚失败: %s (%s) - orphaned unaudited entry", path, exc)

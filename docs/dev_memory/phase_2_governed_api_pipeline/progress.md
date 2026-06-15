@@ -42,6 +42,7 @@
 - [2026-06-15] 首轮本地门禁结果：`uv run ruff format .` -> `24 files left unchanged`；`uv run ruff check .` -> `All checks passed!`；`uv run mypy core tests governed-api` -> `Success: no issues found in 24 source files`；`uv run pytest --cov --cov-report=term-missing -q` -> `76 passed in 5.16s`，总覆盖率 `95.50%`，`middleware.py` 覆盖率 `89%`。
 - [2026-06-15] Phase 2 三路 review R14：按根因总纲修复"middleware 信任调用方自我声明"问题。统一原则：安全相关输入（role/diff/id）都由系统事实裁决，不信自报。
 - [2026-06-15] R14 修复后最终门禁结果：`uv run ruff format .` -> `24 files left unchanged`；`uv run ruff check .` -> `All checks passed!`；`uv run mypy core tests governed-api` -> `Success: no issues found in 24 source files`；`uv run pytest --cov --cov-report=term-missing -q` -> `83 passed in 5.06s`，总覆盖率 `95.39%`，`middleware.py` 覆盖率 `89%`。
+- [2026-06-15] merge 前补回滚失败告警：`middleware._rollback_persisted_entry()` 与 `pipeline._rollback_persisted_path()` 在 `unlink()` 失败时写 error log，避免二阶失败静默残留未审计文件。最终门禁结果：`uv run ruff format .` -> `24 files left unchanged`；`uv run ruff check .` -> `All checks passed!`；`uv run mypy core tests governed-api` -> `Success: no issues found in 24 source files`；`uv run pytest --cov --cov-report=term-missing -q` -> `85 passed in 4.95s`，总覆盖率 `95.49%`，`middleware.py` 覆盖率 `89%`。
 
 ## R14 修复记录
 
@@ -59,7 +60,8 @@
 
 - FIX-4【BLOCKER】：persist 后 audit 失败导致无审计落盘。
   - 修复思路：`run_pipeline` 顶层捕获 middleware 异常并归一为 `MiddlewareResult(ok=False)`；`persist` 写盘前 preflight audit path；`audit_append` 失败时删除刚写入但未审计的 entry 文件。
-  - 测试：`test_pipeline_catches_exceptions_and_rolls_back_unaudited_write`、`test_audit_failure_rolls_back_persisted_entry`。
+  - 补丁：若回滚 `unlink()` 本身失败，记录 error log，内容包含"回滚失败"、文件路径和异常原因，避免误以为未审计文件已清掉。
+  - 测试：`test_pipeline_catches_exceptions_and_rolls_back_unaudited_write`、`test_audit_failure_rolls_back_persisted_entry`、`test_pipeline_logs_when_rollback_unlink_fails`、`test_audit_failure_logs_when_rollback_unlink_fails`。
 
 - FIX-5【MAJOR】：reviewer 漏 contributor 权限。
   - 修复思路：`config/roles.yaml` 展开 reviewer 权限，显式包含 `create_research` / `edit_own_research` / `propose_entry` / `promote_research_to_draft`。
