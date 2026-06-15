@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 Review。Phase 2 V1 Governed API pipeline 已完成本地实现与测试，准备提交 PR 进入高风险三路 review（Claude + ChatGPT + Kimi）。
+待 Review。Phase 2 V1 Governed API pipeline 已完成本地实现与测试，PR 已创建，进入高风险三路 review（Claude + ChatGPT + Kimi）。
 
 ## 测试情况
 
@@ -23,8 +23,9 @@
 
 ## PR 与代码
 
-- PR 链接：待创建
-- 对应 Git Commit：待提交
+- PR 链接：https://github.com/lhmax2010/llm_wiki/pull/2
+- 对应 Git Commit：
+  - `d942bae` - `[Phase 2] governed API middleware pipeline`
 
 ## Review 状态
 
