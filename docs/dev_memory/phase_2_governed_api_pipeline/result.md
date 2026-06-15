@@ -28,7 +28,7 @@
   - `d942bae` - `[Phase 2] governed API middleware pipeline`
   - `bb1765f` - `[Phase 2] docs: add PR link`
   - `c2e0475` - `[Phase 2] fix: R14 governance trust boundary closure`
-  - 回滚失败告警收尾 commit：待提交
+  - `58732a2` - `[Phase 2] fix: 回滚失败告警 + dev_memory 收尾`
 
 ## Review 状态
 
