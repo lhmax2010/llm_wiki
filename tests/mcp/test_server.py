@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 from io import StringIO
 from pathlib import Path
+from typing import Any
 
+import pytest
 from governed_api.roles import RolesConfig
 
 from core.models import Entry
@@ -82,6 +84,42 @@ def test_stdio_server_loop_handles_list_and_call(tmp_path: Path) -> None:
     assert responses[0]["result"]["tools"][0]["name"] == "search_kb"
     search_payload = json.loads(responses[1]["result"]["content"][0]["text"])
     assert search_payload[0]["id"] == "KB-2026-0001"
+
+
+def test_invalid_json_returns_parse_error_and_loop_continues(tmp_path: Path) -> None:
+    handlers = _handlers(tmp_path)
+    stdin = StringIO(
+        "{bad json}\n" + json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}) + "\n"
+    )
+    stdout = StringIO()
+
+    run_stdio_server(handlers, stdin=stdin, stdout=stdout)
+
+    responses = [json.loads(line) for line in stdout.getvalue().splitlines()]
+    assert responses[0]["error"]["code"] == -32700
+    assert responses[1]["result"]["tools"][0]["name"] == "search_kb"
+
+
+def test_unexpected_tool_exception_returns_internal_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(self: MCPHandlers, **kwargs: Any) -> object:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(MCPHandlers, "search_kb", boom)
+    handlers = _handlers(tmp_path)
+    request = {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {"name": "search_kb", "arguments": {"query": "decoder"}},
+    }
+
+    response = handle_jsonrpc_line(handlers, json.dumps(request))
+
+    assert response is not None
+    assert response["error"]["code"] == -32603
 
 
 def _handlers(tmp_path: Path) -> MCPHandlers:

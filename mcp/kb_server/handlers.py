@@ -6,6 +6,8 @@ module, and tests can exercise the governance boundary without a running subproc
 
 from __future__ import annotations
 
+import logging
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,15 +27,18 @@ from governed_api import (
     schema_validate,
 )
 from governed_api.types import Middleware
+from pydantic import ValidationError
 
 from core.id_allocator import IDAllocator
 from core.models import Entry
 from core.storage import read_entry
 from mcp.kb_server.types import ProposeResult, SearchResult, SearchScope
 
+LOGGER = logging.getLogger(__name__)
+KB_ID_RE = re.compile(r"^KB-\d{4}-\d{4}$")
+
 PUBLISHED_DIR = "entries"
 PENDING_DIR = "staging"
-READABLE_DIRS = (PUBLISHED_DIR, PENDING_DIR)
 SUPPORT_RANK = {"weak": 0, "moderate": 1, "strong": 2}
 
 
@@ -75,18 +80,17 @@ class MCPHandlers:
         del expand_synonyms  # P4 owns synonym expansion; P3 keeps the signature stable.
         self._require("read_published")
         scope = scope or {}
-        entries = self._scan_entries(include_pending=include_pending)
-        results = [
-            result
-            for entry in entries
-            if (result := _search_result_for(entry, query=query, scope=scope)) is not None
-        ]
-        results = _sort_results(results, sort)
-        return results[max(offset, 0) : max(offset, 0) + max(limit, 0)]
+        matched_results: list[tuple[Entry, SearchResult]] = []
+        for entry in self._scan_entries(include_pending=include_pending):
+            result = _search_result_for(entry, query=query, scope=scope)
+            if result is not None:
+                matched_results.append((entry, result))
+        sorted_results = _sort_results(matched_results, sort)
+        return sorted_results[max(offset, 0) : max(offset, 0) + max(limit, 0)]
 
-    def get_entry(self, id: str) -> dict[str, Any]:
+    def get_entry(self, id: str, include_pending: bool = False) -> dict[str, Any]:
         self._require("read_published")
-        entry = self._find_entry(id, dirs=READABLE_DIRS)
+        entry = self._find_entry(id, dirs=_read_dirs(include_pending=include_pending))
         if entry is None:
             raise ToolError("E_SCHEMA", f"entry not found: {id}", "id")
         return entry.model_dump(mode="json")
@@ -141,7 +145,13 @@ class MCPHandlers:
         credibility: dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> ProposeResult:
-        previous_entry = self._find_entry(id, dirs=READABLE_DIRS)
+        try:
+            _validate_entry_id(id)
+        except ToolError as exc:
+            return _failed_propose_result(exc)
+        previous_entry = self._find_entry(id, dirs=_read_dirs(include_pending=True))
+        if previous_entry is None:
+            return _failed_propose_result(ToolError("E_SCHEMA", f"entry not found: {id}", "id"))
         payload = _merge_update_payload(id, patch, previous_entry)
         if credibility is not None:
             payload["credibility"] = credibility
@@ -209,9 +219,13 @@ class MCPHandlers:
 
     def _find_entry(self, entry_id: str, *, dirs: Iterable[str]) -> Entry | None:
         for dirname in dirs:
-            path = self.kb_root / dirname / f"{entry_id}.md"
+            path = _entry_path(self.kb_root, dirname, entry_id)
             if path.is_file():
-                return read_entry(path)
+                try:
+                    return read_entry(path)
+                except (OSError, ValidationError, ValueError) as exc:
+                    LOGGER.warning("skipping unreadable entry file: %s (%s)", path, exc)
+                    raise ToolError("E_SCHEMA", f"entry is unreadable: {entry_id}", "id") from exc
         return None
 
     def _require(self, permission: str) -> None:
@@ -231,7 +245,36 @@ class MCPHandlers:
 def _read_entries_from_dir(directory: Path) -> list[Entry]:
     if not directory.exists():
         return []
-    return [read_entry(path) for path in sorted(directory.glob("*.md")) if path.is_file()]
+    entries: list[Entry] = []
+    for path in sorted(directory.glob("*.md")):
+        if not path.is_file():
+            continue
+        try:
+            entries.append(read_entry(path))
+        except (OSError, ValidationError, ValueError) as exc:
+            LOGGER.warning("skipping unreadable entry file: %s (%s)", path, exc)
+    return entries
+
+
+def _read_dirs(*, include_pending: bool) -> tuple[str, ...]:
+    return (PUBLISHED_DIR, PENDING_DIR) if include_pending else (PUBLISHED_DIR,)
+
+
+def _validate_entry_id(entry_id: str) -> str:
+    if not KB_ID_RE.fullmatch(entry_id):
+        raise ToolError("E_SCHEMA", "id must match KB-{year}-{NNNN}", "id")
+    return entry_id
+
+
+def _entry_path(kb_root: Path, dirname: str, entry_id: str) -> Path:
+    _validate_entry_id(entry_id)
+    if dirname not in _read_dirs(include_pending=True):
+        raise ToolError("E_SCHEMA", f"directory is not MCP-readable: {dirname}", "dir")
+    base = (kb_root / dirname).resolve()
+    path = (base / f"{entry_id}.md").resolve()
+    if not path.is_relative_to(base):
+        raise ToolError("E_SCHEMA", "entry path escaped MCP-readable directory", "id")
+    return path
 
 
 def _search_result_for(entry: Entry, *, query: str, scope: SearchScope) -> SearchResult | None:
@@ -345,12 +388,24 @@ def _score(entry: Entry, query: str) -> int:
     return score
 
 
-def _sort_results(results: list[SearchResult], sort: str) -> list[SearchResult]:
+def _sort_results(results: list[tuple[Entry, SearchResult]], sort: str) -> list[SearchResult]:
     if sort == "updated_desc":
-        return sorted(results, key=lambda result: result["id"], reverse=True)
+        return [
+            result
+            for _, result in sorted(
+                results, key=lambda item: (item[0].updated, item[0].id), reverse=True
+            )
+        ]
     if sort == "title":
-        return sorted(results, key=lambda result: result["title"])
-    return sorted(results, key=lambda result: (result.get("score", 0), result["id"]), reverse=True)
+        return [result for _, result in sorted(results, key=lambda item: item[1]["title"])]
+    return [
+        result
+        for _, result in sorted(
+            results,
+            key=lambda item: (item[1].get("score", 0), item[0].updated, item[0].id),
+            reverse=True,
+        )
+    ]
 
 
 def _entry_summary(entry: Entry) -> dict[str, Any]:
@@ -377,7 +432,7 @@ def _merge_update_payload(
     }
     if previous_entry is None:
         payload = dict(patch_without_meta)
-        payload.setdefault("id", entry_id)
+        payload["id"] = entry_id
         return payload
     payload = previous_entry.model_dump(mode="json")
     payload.update(patch_without_meta)
@@ -422,6 +477,18 @@ def _propose_result(
 
 def _api_error_to_issue(error: ApiError) -> dict[str, Any]:
     return {"code": error.code, "field": error.field or "", "message": error.message}
+
+
+def _failed_propose_result(error: ToolError) -> ProposeResult:
+    return {
+        "validation_errors": [
+            {"code": error.code, "field": error.field or "", "message": error.message}
+        ],
+        "validation_warnings": [],
+        "missing_fields": [],
+        "open_questions": [],
+        "possible_duplicates": [],
+    }
 
 
 def _issue_to_dict(issue: object) -> dict[str, Any]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -115,6 +116,39 @@ def test_get_entry_returns_complete_agent_view(handlers: MCPHandlers) -> None:
     assert result["code_binding"]["stale_reason"] == "path changed"
 
 
+def test_get_entry_rejects_path_traversal_and_cannot_read_research(
+    handlers: MCPHandlers,
+) -> None:
+    _write_entry(
+        handlers.kb_root / "research" / "KB-2026-0004.md",
+        entry_id="KB-2026-0004",
+        trust_state="research",
+        title="Research-only decoder note",
+    )
+
+    with pytest.raises(ToolError) as traversal:
+        handlers.get_entry(id="../research/KB-2026-0004")
+
+    assert traversal.value.code == "E_SCHEMA"
+    assert traversal.value.field == "id"
+    with pytest.raises(ToolError):
+        handlers.get_entry(id="KB-2026-0004", include_pending=True)
+
+
+def test_get_entry_include_pending_controls_staging_visibility(handlers: MCPHandlers) -> None:
+    _write_entry(
+        handlers.kb_root / "staging" / "KB-2026-0002.md",
+        entry_id="KB-2026-0002",
+        trust_state="pending",
+        title="Pending decoder failure",
+    )
+
+    with pytest.raises(ToolError):
+        handlers.get_entry(id="KB-2026-0002")
+
+    assert handlers.get_entry(id="KB-2026-0002", include_pending=True)["id"] == "KB-2026-0002"
+
+
 def test_list_categories_and_browse_read_published_entries_only(handlers: MCPHandlers) -> None:
     _write_entry(
         handlers.kb_root / "entries" / "KB-2026-0001.md",
@@ -135,6 +169,42 @@ def test_list_categories_and_browse_read_published_entries_only(handlers: MCPHan
     assert categories["modules"] == ["decoder"]
     assert categories["tags"] == ["decoder"]
     assert [entry["id"] for entry in browse["entries"]] == ["KB-2026-0001"]
+
+
+def test_read_tools_skip_bad_markdown_and_log_warning(
+    handlers: MCPHandlers,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _write_entry(handlers.kb_root / "entries" / "KB-2026-0001.md", trust_state="published")
+    bad_path = handlers.kb_root / "entries" / "KB-2026-9999.md"
+    bad_path.parent.mkdir(parents=True, exist_ok=True)
+    bad_path.write_text("not frontmatter", encoding="utf-8")
+    caplog.set_level(logging.WARNING, logger="mcp.kb_server.handlers")
+
+    results = handlers.search_kb("decoder")
+    categories = handlers.list_categories()
+    browse = handlers.browse(module="decoder")
+
+    assert [result["id"] for result in results] == ["KB-2026-0001"]
+    assert categories["modules"] == ["decoder"]
+    assert [entry["id"] for entry in browse["entries"]] == ["KB-2026-0001"]
+    assert "skipping unreadable entry file" in caplog.text
+    assert str(bad_path) in caplog.text
+
+
+def test_search_updated_desc_sorts_by_updated_timestamp(handlers: MCPHandlers) -> None:
+    older = entry_payload(entry_id="KB-2026-9999", trust_state="published")
+    older["title"] = "Older decoder failure"
+    older["updated"] = "2026-01-01T00:00:00Z"
+    newer = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    newer["title"] = "Newer decoder failure"
+    newer["updated"] = "2026-12-31T00:00:00Z"
+    _write_payload(handlers.kb_root / "entries" / "KB-2026-9999.md", older)
+    _write_payload(handlers.kb_root / "entries" / "KB-2026-0001.md", newer)
+
+    results = handlers.search_kb("decoder", sort="updated_desc")
+
+    assert [result["id"] for result in results] == ["KB-2026-0001", "KB-2026-9999"]
 
 
 def test_propose_entry_runs_all_pipeline_steps_in_order(
@@ -209,10 +279,10 @@ def test_propose_update_uses_previous_entry_for_actual_diff_not_self_report(
     assert staged.id == "KB-2026-0001"
 
 
-def test_propose_update_without_previous_entry_can_still_run_as_heavy(
+def test_propose_update_without_previous_entry_fails_and_ignores_patch_id(
     handlers: MCPHandlers,
 ) -> None:
-    full_patch = entry_payload(entry_id="KB-2026-0099", trust_state="published")
+    full_patch = entry_payload(entry_id="KB-2026-0001", trust_state="published")
 
     result = handlers.propose_update(
         id="KB-2026-0099",
@@ -221,8 +291,24 @@ def test_propose_update_without_previous_entry_can_still_run_as_heavy(
         request_id="req-3",
     )
 
-    assert result["status"] == "pending"
-    assert (handlers.kb_root / "staging" / "KB-2026-0099.md").exists()
+    assert "status" not in result
+    assert result["validation_errors"][0]["code"] == "E_SCHEMA"
+    assert result["validation_errors"][0]["field"] == "id"
+    assert result["validation_errors"][0]["message"] == "entry not found: KB-2026-0099"
+    assert not (handlers.kb_root / "staging" / "KB-2026-0099.md").exists()
+    assert not (handlers.kb_root / "staging" / "KB-2026-0001.md").exists()
+
+
+def test_propose_update_rejects_invalid_id_before_path_use(handlers: MCPHandlers) -> None:
+    result = handlers.propose_update(
+        id="../research/KB-2026-0004",
+        patch=entry_payload(entry_id="KB-2026-0004", trust_state="published"),
+        reason="path traversal",
+        request_id="req-4",
+    )
+
+    assert result["validation_errors"][0]["code"] == "E_SCHEMA"
+    assert result["validation_errors"][0]["field"] == "id"
 
 
 def test_research_hints_is_permissioned_stub(

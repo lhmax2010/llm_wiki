@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +14,8 @@ from governed_api.roles import load_roles_config
 from core.id_allocator import IDAllocator
 from mcp.kb_server.handlers import MCPHandlers, ToolError
 from mcp.kb_server.types import ToolCallResult, ToolDescriptor
+
+LOGGER = logging.getLogger(__name__)
 
 
 def tool_descriptors() -> list[ToolDescriptor]:
@@ -33,18 +36,25 @@ def run_stdio_server(
     for line in stdin:
         if not line.strip():
             continue
-        response = handle_jsonrpc_line(handlers, line)
+        try:
+            response = handle_jsonrpc_line(handlers, line)
+        except Exception as exc:
+            LOGGER.exception("MCP stdio loop recovered from unhandled error")
+            response = _error_response(None, -32603, f"internal error: {type(exc).__name__}")
         if response is not None:
             stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
             stdout.flush()
 
 
 def handle_jsonrpc_line(handlers: MCPHandlers, line: str) -> dict[str, Any] | None:
-    request = json.loads(line)
-    request_id = request.get("id")
-    method = request.get("method")
-    params = request.get("params", {})
+    request_id: object | None = None
     try:
+        request = json.loads(line)
+        if not isinstance(request, dict):
+            return _error_response(request_id, -32600, "invalid request")
+        request_id = request.get("id")
+        method = request.get("method")
+        params = request.get("params", {})
         result: dict[str, Any] | ToolCallResult
         if method == "initialize":
             result = {
@@ -61,10 +71,15 @@ def handle_jsonrpc_line(handlers: MCPHandlers, line: str) -> dict[str, Any] | No
         else:
             return _error_response(request_id, -32601, f"method not found: {method}")
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
+    except json.JSONDecodeError as exc:
+        return _error_response(request_id, -32700, f"parse error: {exc.msg}")
     except ToolError as exc:
         return _error_response(request_id, -32000, exc.message, exc.to_dict())
     except (TypeError, ValueError, KeyError) as exc:
         return _error_response(request_id, -32602, str(exc))
+    except Exception as exc:
+        LOGGER.exception("MCP tool call failed with internal error")
+        return _error_response(request_id, -32603, f"internal error: {type(exc).__name__}")
 
 
 def build_handlers(repo_root: Path, *, user: str) -> MCPHandlers:

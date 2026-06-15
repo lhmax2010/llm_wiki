@@ -35,7 +35,44 @@
 - [2026-06-15] 完成 `mcp/kb_server/`：handler 核心、TypedDict、最小 JSON-RPC stdio server；未新增业务依赖。
 - [2026-06-15] 补 `tests/mcp/`：覆盖 search 白名单隔离、pending 只含 staging、get_entry 完整字段、list/browse 只读 published、propose_entry 七段顺序与真实写盘/audit、propose_update 系统事实 diff、research hints stub、stdio server loop。
 - [2026-06-15] 首轮门禁结果：`uv run ruff format .` -> `32 files left unchanged`；`uv run ruff check .` -> `All checks passed!`；`uv run mypy core tests governed-api mcp` -> `Success: no issues found in 32 source files`；`uv run pytest --cov --cov-report=term-missing -q` -> `97 passed in 5.94s`，总覆盖率 `93.15%`，`mcp/kb_server/handlers.py` 覆盖率 `80%`，`mcp/kb_server/server.py` 覆盖率 `62%`。
+- [2026-06-15] Phase 3 review R14：读取项目根 `phase3_fix_instructions.md` 并闭环。根因总纲：两个 BLOCKER 同源于 MCP 层按调用方 id 直接拼路径，缺少 `^KB-\d{4}-\d{4}$` 形状校验和 resolve 后白名单目录确认；这与 P1 三态 `../`、P2 payload id 自报属于同一类“路径/身份事实不能信调用方自报”问题。
+- [2026-06-15] R14 修复后门禁结果：`uv run ruff format .` -> `32 files left unchanged`；`uv run ruff check .` -> `All checks passed!`；`uv run mypy core tests governed-api mcp` -> `Success: no issues found in 32 source files`；`uv run pytest --cov --cov-report=term-missing -q` -> `104 passed in 6.17s`，总覆盖率 `93.07%`，`mcp/kb_server/handlers.py` 覆盖率 `80%`，`mcp/kb_server/server.py` 覆盖率 `69%`。
+
+## R14 修复记录
+
+- FIX-1【BLOCKER】：`get_entry` path traversal 可读到 research。
+  - 修复思路：新增统一 `KB_ID_RE` / `_validate_entry_id()` / `_entry_path()`；所有按 id 读路径的 MCP 入口先校验 `^KB-\d{4}-\d{4}$`，再 `resolve()`，并确认最终路径仍在白名单目录内。`get_entry` 默认只读 `entries/`，即使 `include_pending=True` 也只扩到 `staging/`，不触碰 `research/`。
+  - 测试：`test_get_entry_rejects_path_traversal_and_cannot_read_research`。
+
+- FIX-2【BLOCKER】：`propose_update` 缺旧条目时从 patch 自带 id 继续跑。
+  - 修复思路：`propose_update` 先校验入口 id，再读取系统事实旧 entry；`previous_entry is None` 时直接返回 `E_SCHEMA(id): entry not found`，不进入 pipeline；`_merge_update_payload()` 即使未来被复用也强制 `payload["id"] = entry_id`，不信 patch 自带 id。
+  - 测试：反转旧测试为 `test_propose_update_without_previous_entry_fails_and_ignores_patch_id`，并补 `test_propose_update_rejects_invalid_id_before_path_use`。
+
+- FIX-3【MAJOR】：坏 `.md` 拖垮读工具。
+  - 修复思路：`_read_entries_from_dir()` 逐文件 `try/except`，坏 entry 记录 warning 后跳过；这是读索引容错，区别于 SQLite 发号重建的 fail-loud。
+  - 测试：`test_read_tools_skip_bad_markdown_and_log_warning` 覆盖 search/list/browse 继续返回好条目并记录日志。
+
+- FIX-4【MAJOR】：server JSON 解析在 try 外崩溃。
+  - 修复思路：`handle_jsonrpc_line()` 将 `json.loads()` 纳入 try，`JSONDecodeError` 返回 JSON-RPC `-32700` parse error；`run_stdio_server()` 外层兜底，单条坏请求不杀循环。
+  - 测试：`test_invalid_json_returns_parse_error_and_loop_continues`。
+
+- FIX-5【MINOR】：协议层未捕获未知异常。
+  - 修复思路：`handle_jsonrpc_line()` 对未预期异常记录 exception 并返回 `-32603` internal error；stdio loop 也有外层 `-32603` 兜底。
+  - 测试：`test_unexpected_tool_exception_returns_internal_error`。
+
+- FIX-6【MINOR】：`get_entry` 未按 `include_pending` 分级。
+  - 修复思路：`get_entry(id, include_pending=False)` 默认只读 `entries/`；`include_pending=True` 才读 `entries/ + staging/`。
+  - 测试：`test_get_entry_include_pending_controls_staging_visibility`。
+
+- FIX-7【MINOR】：`sort=updated_desc` 语义错误。
+  - 修复思路：search 内部保留 `(Entry, SearchResult)` 对，`updated_desc` 用 `Entry.updated` 再按 id 排序，不再用 id 冒充更新时间。
+  - 测试：`test_search_updated_desc_sorts_by_updated_timestamp`。
 
 ## TODO
 
-- restate 待用户确认。
+- limit 上限/类型校验：后续给 `limit` 做 clamp 和输入类型校验。
+- IDAllocator 复用：当前每次 build handler/propose 可新建 allocator，功能正确但可做性能优化。
+- search 子目录：P3 当前 flat `.md` 扫描，后续若 entries 分层再改 `rglob` 或文档化目录约束。
+- MCP `inputSchema` 当前 `additionalProperties: true`，后续补严格 JSON Schema。
+- `possible_duplicates` / `E_DUP` 当前恒空，后续 Phase 补重复检测。
+- NIT：`_require` 里 `read_published` 占位、读写鉴权语义一致性、`SearchResult.stale` 是 P3 扩展需后续文档化。
