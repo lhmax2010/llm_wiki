@@ -27,7 +27,7 @@
 - 对应 Git Commit：
   - `d942bae` - `[Phase 2] governed API middleware pipeline`
   - `bb1765f` - `[Phase 2] docs: add PR link`
-  - R14 修复 commit：待提交
+  - `c2e0475` - `[Phase 2] fix: R14 governance trust boundary closure`
 
 ## Review 状态
 
