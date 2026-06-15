@@ -11,7 +11,7 @@
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests` -> `Success: no issues found in 10 source files`
 - 单测 + 覆盖率：
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `47 passed in 4.75s`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `47 passed in 3.57s`
   - Total coverage: `96.80%`
   - touched core files coverage snapshot:
     - `core/__init__.py`: `100%`
