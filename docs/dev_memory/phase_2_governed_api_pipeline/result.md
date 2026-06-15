@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 Merge。Phase 2 V1 Governed API pipeline 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-10），并补充回滚失败告警；当前 PR #2 已更新，等待 merge。
+已 Merge。Phase 2 V1 Governed API pipeline 已通过 PR #2 合并到 `main`；三路 review 后的 R14 修复（FIX-1 到 FIX-10）已闭环，并补充回滚失败告警。checkpoint tag：`checkpoint/phase_2_governed_api`。
 
 ## 测试情况
 
@@ -25,10 +25,13 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/2
 - 对应 Git Commit：
-  - `d942bae` - `[Phase 2] governed API middleware pipeline`
-  - `bb1765f` - `[Phase 2] docs: add PR link`
-  - `c2e0475` - `[Phase 2] fix: R14 governance trust boundary closure`
+  - `b0a54ed` - `Merge pull request #2 from lhmax2010/phase/2-governed-api-pipeline`
+  - `6a0cbd0` - `[Phase 2] docs: record rollback warning commit`
   - `58732a2` - `[Phase 2] fix: 回滚失败告警 + dev_memory 收尾`
+  - `918c443` - `[Phase 2] docs: record R14 fix commit`
+  - `c2e0475` - `[Phase 2] fix: R14 governance trust boundary closure`
+  - `bb1765f` - `[Phase 2] docs: add PR link`
+  - `d942bae` - `[Phase 2] governed API middleware pipeline`
 
 ## Review 状态
 
@@ -49,5 +52,4 @@
 
 ## 下一步
 
-- 等待 R14 复核确认。
-- 复核通过后更新本文件状态、最终 commit、INDEX，再 merge 和打 checkpoint tag。
+- Phase 3 前置：MCP 接入前读取 Phase 1/2 dev_memory，复用 Governed API pipeline，不绕过 middleware。

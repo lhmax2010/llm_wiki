@@ -5,3 +5,4 @@
 | tag | commit | 覆盖范围 | 回退指令 | 回退后状态 |
 |-----|--------|----------|----------|------------|
 | `checkpoint/phase_1_content_core` | `3751bcea2a18f3d1449e8433822d782e0eac58ec` | Phase 1 内容核、Pydantic schema、证据映射/校验、SQLite 发号与重建、三态目录一致性、code_binding shape-only 校验、dev_memory 三件套；PR #1 四路 review/R14 闭环，`48 passed`，coverage `96.84%`。 | `git switch main && git reset --hard checkpoint/phase_1_content_core` | 回到 Phase 1 合并完成、Phase 2 尚未开始的基线。 |
+| `checkpoint/phase_2_governed_api` | `b0a54ed72cf062d407753f429424eaf30b61492e` | Phase 2 Governed API middleware pipeline；七段 middleware、roles.yaml ACL、audit append、persist 复用 Phase 1 core、三路 review/R14 闭环，含 role/diff/id/audit 信任边界修复与回滚失败告警，`85 passed`，coverage `95.49%`。 | `git switch main && git reset --hard checkpoint/phase_2_governed_api` | 回到 Phase 2 合并完成、Phase 3 尚未开始的基线。 |
