@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 Merge。Phase 3 MCP server V1 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-7），两个 BLOCKER 已复核通过，当前 PR #3 等待 merge。
+已 Merge。Phase 3 MCP server V1 已通过 PR #3 合并到 `main`；三路 review 后的 R14 修复（FIX-1 到 FIX-7）已闭环，两个 BLOCKER 已复核通过。checkpoint tag：`checkpoint/phase_3_mcp_server`。
 
 ## 测试情况
 
@@ -23,10 +23,12 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/3
 - 对应 Git Commit：
+  - `e8c5ce9` - `Merge pull request #3 from lhmax2010/phase/3-mcp-server`
   - `fafa107` - `[Phase 3] mcp server wrapper`
   - `917d438` - `[Phase 3] fix: R14 id path guard and MCP robustness`
   - `42df17a` - `[Phase 3] docs: record R14 fix commit`
   - `6651f0e` - `[Phase 3] chore: remove external fix instructions from repo`
+  - `176ebd4` - `[Phase 3] docs: dev_memory 收尾`
 
 ## Review 状态
 
@@ -48,4 +50,4 @@
 
 ## 下一步
 
-- Merge PR #3，打 `checkpoint/phase_3_mcp_server`，更新 `docs/checkpoints.md` 与 `docs/dev_memory/INDEX.md`。
+- 按 DAG 进入下一 Phase 前置；继续继承 Phase 2 pipeline 信任边界和 Phase 3 research 物理不可见约束。
