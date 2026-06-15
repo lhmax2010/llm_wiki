@@ -23,6 +23,25 @@ def test_markdown_frontmatter_roundtrip(tmp_path: Path, make_entry: Callable[...
     assert report.ok, report.errors
 
 
+def test_write_entry_is_atomic_when_replace_fails(
+    tmp_path: Path, make_entry: Callable[..., Entry], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "kb" / "entries" / "KB-2026-0001.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("original\n", encoding="utf-8")
+
+    def fail_replace(*args: object, **kwargs: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr("core.storage.os.replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        write_entry(path, make_entry())
+
+    assert path.read_text(encoding="utf-8") == "original\n"
+    assert list(path.parent.glob("*.tmp")) == []
+
+
 def test_target_dir_for_trust_state() -> None:
     assert target_dir_for_trust_state(TrustState.PUBLISHED) == "entries"
     assert target_dir_for_trust_state(TrustState.PENDING) == "staging"
