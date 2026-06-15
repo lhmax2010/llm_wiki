@@ -44,7 +44,7 @@ pretty = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = [".", "governed-api"]
 addopts = [
     "--strict-markers",
     "--strict-config",
