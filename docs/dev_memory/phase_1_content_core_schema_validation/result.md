@@ -2,7 +2,7 @@
 
 ## 最终状态
 
-待 Merge。Phase 1 代码已完成并推送到当前 PR 分支，四路 review 的合并前 BLOCKER/MAJOR/MINOR 修复项已闭环；merge 前发号默认年份已改为本地时间（部署约定 Asia/Shanghai），并补本地跨年边界测试。checkpoint tag 将在 PR merge 后打到 main 最终 commit。
+已 Merge。Phase 1 已通过 PR #1 合并到 `main`；四路 review 的合并前 BLOCKER/MAJOR/MINOR 修复项已闭环；merge 前发号默认年份已改为本地时间（部署约定 Asia/Shanghai），并补本地跨年边界测试。checkpoint tag：`checkpoint/phase_1_content_core`。
 
 ## 测试情况
 
@@ -28,6 +28,8 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/1
 - 对应 Git Commit：
+  - `3751bce` - `Merge pull request #1 from lhmax2010/phase/1-content-core-schema-validation`
+  - `880dffb` - `[Phase 1] fix: 发号时区改本地 + dev_memory 收尾`
   - `d950453` - `[Phase 1] content core schema validation`
   - `6ba0773` - `[Phase 1] add PR link to review prompt`
   - `f443546` - `[Phase 1] docs: dev_memory 三件套 + 流程文档更新`
@@ -46,9 +48,8 @@
 - `E_RESEARCH_AS_EVIDENCE` 未在 Phase 1 实现；按 design §7 属于 Phase 6 research 隔离层范围。
 - 真实 `path_hash` / `symbol_hash` / `build_config_hash` 计算、clangd/tree-sitter、stale 检测未实现；按 v1.3 明确留给后续健康检查脚本。
 - staging/review/publish 流转、RBAC、audit、MCP、search/index、Web、collector 均未实现；按 Phase DAG 留给后续阶段。
-- checkpoint tag 尚未打；按新版 SOP，应在 PR merge 后再在 main 最终 commit 上打 tag。
+- checkpoint tag 已登记为 `checkpoint/phase_1_content_core`。
 
 ## 下一阶段计划
 
-- Phase 1 merge 后更新 `docs/checkpoints.md` 和 `docs/dev_memory/INDEX.md`，再打 checkpoint tag。
 - Phase 2：Governed API middleware pipeline，包括 auth_context、schema_validate、evidence_validate、classify_write_route、review_route、audit_append。

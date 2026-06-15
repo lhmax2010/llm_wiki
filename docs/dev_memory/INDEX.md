@@ -4,12 +4,12 @@
 > 以及上一 Phase 的 plan/progress/result。
 
 ## 当前状态
-- 当前活跃 Phase：phase_1_content_core_schema_validation（待 review / 待 merge）
-- 最后已 Merge Phase：无
+- 当前活跃 Phase：无（Phase 1 已 Merge；下一步进入 Phase 2 前置）
+- 最后已 Merge Phase：phase_1_content_core_schema_validation
 
 ## Phase 列表
 | 编号 | 名称 | 状态 | dev_memory | PR 链接 | Git Commit |
 |------|------|------|------------|---------|------------|
-| phase_1 | content-core-schema-validation | 待 Review | `docs/dev_memory/phase_1_content_core_schema_validation/` | https://github.com/lhmax2010/llm_wiki/pull/1 | d950453, 6ba0773 |
+| phase_1 | content-core-schema-validation | 已 Merge | `docs/dev_memory/phase_1_content_core_schema_validation/` | https://github.com/lhmax2010/llm_wiki/pull/1 | 3751bce (merge), 880dffb (PR head) |
 
 （状态：进行中 / 待 Review / 已 Merge / 已 Skip。每次状态变化立即更新。）
