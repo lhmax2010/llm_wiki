@@ -2,7 +2,7 @@
 
 ## 最终状态
 
-待 Review。Phase 1 代码已完成并推送到当前 PR 分支，PR 已创建；四路 review 的合并前 BLOCKER/MAJOR/MINOR 修复项已处理，仍待复核和 merge，尚未打 checkpoint tag。
+待 Merge。Phase 1 代码已完成并推送到当前 PR 分支，四路 review 的合并前 BLOCKER/MAJOR/MINOR 修复项已闭环；merge 前发号默认年份已改为本地时间（部署约定 Asia/Shanghai），并补本地跨年边界测试。checkpoint tag 将在 PR merge 后打到 main 最终 commit。
 
 ## 测试情况
 
@@ -11,8 +11,8 @@
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests` -> `Success: no issues found in 10 source files`
 - 单测 + 覆盖率：
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `47 passed in 3.57s`
-  - Total coverage: `96.80%`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `48 passed in 3.73s`
+  - Total coverage: `96.84%`
   - touched core files coverage snapshot:
     - `core/__init__.py`: `100%`
     - `core/errors.py`: `100%`
@@ -30,6 +30,9 @@
 - 对应 Git Commit：
   - `d950453` - `[Phase 1] content core schema validation`
   - `6ba0773` - `[Phase 1] add PR link to review prompt`
+  - `f443546` - `[Phase 1] docs: dev_memory 三件套 + 流程文档更新`
+  - `e38ab3b` - `[Phase 1] fix: R14 review closure`
+  - `0db5f3a` - `[Phase 1] docs: update R14 verification result`
 
 ## Review 状态
 
@@ -43,10 +46,9 @@
 - `E_RESEARCH_AS_EVIDENCE` 未在 Phase 1 实现；按 design §7 属于 Phase 6 research 隔离层范围。
 - 真实 `path_hash` / `symbol_hash` / `build_config_hash` 计算、clangd/tree-sitter、stale 检测未实现；按 v1.3 明确留给后续健康检查脚本。
 - staging/review/publish 流转、RBAC、audit、MCP、search/index、Web、collector 均未实现；按 Phase DAG 留给后续阶段。
-- checkpoint tag 尚未打；按新版 SOP，应在 review 闭环、PR merge 后再在 merge 后 commit 上打 tag。
+- checkpoint tag 尚未打；按新版 SOP，应在 PR merge 后再在 main 最终 commit 上打 tag。
 
 ## 下一阶段计划
 
-- 完成 Phase 1 ChatGPT/Kimi 外发 review，按 R14 处理 BLOCKER/MAJOR/MINOR。
-- Phase 1 merge 后更新 `result.md` 状态和 `docs/dev_memory/INDEX.md`，再打 checkpoint tag。
+- Phase 1 merge 后更新 `docs/checkpoints.md` 和 `docs/dev_memory/INDEX.md`，再打 checkpoint tag。
 - Phase 2：Governed API middleware pipeline，包括 auth_context、schema_validate、evidence_validate、classify_write_route、review_route、audit_append。

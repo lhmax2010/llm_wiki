@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from contextlib import closing
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
@@ -27,7 +27,7 @@ class IDAllocator:
         self._ensure_schema()
 
     def allocate(self, year: int | None = None) -> str:
-        actual_year = year or datetime.now(UTC).year
+        actual_year = year if year is not None else datetime.now().year
         _validate_year(actual_year)
         with closing(self._connect()) as conn:
             conn.execute("BEGIN IMMEDIATE")

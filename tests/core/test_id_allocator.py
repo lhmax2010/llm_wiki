@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+import core.id_allocator as id_allocator_module
 from core.id_allocator import IDAllocator
 
 
@@ -16,6 +18,27 @@ def test_allocate_ids_are_unique_under_concurrency(tmp_path: Path) -> None:
 
     assert len(ids) == len(set(ids))
     assert sorted(ids) == [f"KB-2026-{number:04d}" for number in range(1, 41)]
+
+
+def test_allocate_default_year_uses_local_timezone_sequence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FrozenDateTime:
+        current = datetime(2026, 12, 31, 23, 0, 0)
+
+        @classmethod
+        def now(cls) -> datetime:
+            return cls.current
+
+    monkeypatch.setattr(id_allocator_module, "datetime", FrozenDateTime)
+    allocator = IDAllocator(tmp_path / "kb" / "indexes" / "ids.sqlite")
+
+    FrozenDateTime.current = datetime(2026, 12, 31, 23, 0, 0)
+    assert allocator.allocate() == "KB-2026-0001"
+
+    FrozenDateTime.current = datetime(2027, 1, 1, 1, 0, 0)
+    assert allocator.allocate() == "KB-2027-0001"
+    assert allocator.allocate(2026) == "KB-2026-0002"
 
 
 def test_rebuild_scans_official_id_dirs_including_deprecated(tmp_path: Path) -> None:

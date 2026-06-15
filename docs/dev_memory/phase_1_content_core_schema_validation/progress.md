@@ -8,6 +8,10 @@
   - 原因：设计 v1.3 明确 ID 口径为 SQLite 发号，不再使用 git-derived 旧口径。`BEGIN IMMEDIATE` 在分配前拿写锁，让多个 agent/Web 写入者在同一个 SQLite 文件上串行领取 ID，优先保证唯一性。按年份建序列可保持 `KB-YYYY-NNNN` 可读性，重建时扫描正式 ID 目录取 max+1，允许空洞但不回收 ID。
   - 排除的方案：排除了 git commit/hash 派生 ID，因为 v1.3 已冻结为 SQLite 发号；排除了纯文件锁，因为 Windows/跨进程可靠性不如 SQLite 事务；排除了 UUID，因为不符合 `KB-YYYY-NNNN` 设计；排除了全局不分年份序列，因为会破坏 ID 语义。
 
+- 决策：默认发号年份使用运行环境本地时间；本项目部署约定为 Asia/Shanghai，本地创建条目应按北京时间归属年份。
+  - 原因：团队会按内网部署地的日历理解 `KB-YYYY-NNNN`，跨年边界尤其需要符合本地直觉。`datetime.now().year` 使用本机本地时区，调用方仍可显式传 `year` 覆盖，适合导入、回放和测试场景。
+  - 排除的方案：排除了 UTC 默认，因为本地跨年时会出现 2027 年本地创建却拿到 `KB-2026-xxxx` 的反直觉结果；排除了在 Phase 1 显式 `ZoneInfo("Asia/Shanghai")`，因为当前 Windows 环境缺少 IANA `tzdata`，会为一个默认值引入额外依赖；排除了强制所有调用方传 `year`，因为普通写入路径应有安全默认。
+
 - 决策：证据映射以 evidence 驱动，降级链在 `validate_entry()` / `_normalize_credibility()` 内集中实现。
   - 原因：Phase 1 要把可信度纪律放在内容核入口，而不是相信作者声明。`fact` 缺少强证据时先降为 `observation`，若 observation 证据也不成立再降为 `llm_hypothesis`；`historical_pattern` 缺少 `historical_entry` 时降为 `llm_hypothesis`；`static_inference` 缺少 code 证据、`spec` 缺少 spec+version 时直接打回。entry 级 credibility 先归一化，section 级再继承或覆盖，section 有本地 evidence 时会把降级结果写回 normalized section，避免 warning 和返回状态不一致。
   - 排除的方案：排除了只报 warning 不改 normalized claim 的方案，因为 agent 消费时容易继续误用高可信字段；排除了所有不符一律打回，因为 design §4.1.3 明确部分 claim_type 可降级；排除了把证据映射推迟到 P2 middleware，因为 Phase 1 DoD 要求纯代码校验可落地。
@@ -60,6 +64,7 @@
 - [2026-06-13] 创建 PR https://github.com/lhmax2010/llm_wiki/pull/1，等待 ChatGPT/Kimi 外发 review 和 R14 闭环。
 - [2026-06-15] 按新版 SOP 把单文件 dev_memory 重组成 `plan.md` / `progress.md` / `result.md` 三件套。
 - [2026-06-15] 按四路 review 的 R14 修复清单闭环 FIX-1 到 FIX-6，并补对应失败测试。
+- [2026-06-15] merge 前将默认发号年份从 UTC 改为本地时间（部署约定 Asia/Shanghai），并补本地跨年边界测试。
 
 ## R14 修复记录
 
@@ -91,6 +96,5 @@
 
 - created/updated ISO8601 格式校验。
 - 4+ 反引号围栏边角、frontmatter 内 `---` 切分。
-- 发号年份口径：当前默认 UTC；后续明确要求调用方传 year，或文档注明 UTC 口径。
 - 补测试缺口：跨年发号独立序列、section 全空继承。
 - NIT：WAL pragma 重复设置、TrustState 多余转换、Evidence docstring 说明应指向 validation 而非 model validator。
