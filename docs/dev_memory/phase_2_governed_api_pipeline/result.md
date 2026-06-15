@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 Review。Phase 2 V1 Governed API pipeline 已完成本地实现与测试，PR 已创建，进入高风险三路 review（Claude + ChatGPT + Kimi）。
+待 R14 复核。Phase 2 V1 Governed API pipeline 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-10），当前 PR #2 已更新，等待复核后 merge。
 
 ## 测试情况
 
@@ -11,14 +11,14 @@
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests governed-api` -> `Success: no issues found in 24 source files`
 - 单测 + 覆盖率：
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `76 passed in 5.16s`
-  - Total coverage: `95.50%`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `83 passed in 5.06s`
+  - Total coverage: `95.39%`
   - touched governed-api coverage snapshot:
     - `governed-api/governed_api/__init__.py`: `100%`
-    - `governed-api/governed_api/audit.py`: `100%`
+    - `governed-api/governed_api/audit.py`: `92%`
     - `governed-api/governed_api/middleware.py`: `89%`
-    - `governed-api/governed_api/pipeline.py`: `100%`
-    - `governed-api/governed_api/roles.py`: `84%`
+    - `governed-api/governed_api/pipeline.py`: `96%`
+    - `governed-api/governed_api/roles.py`: `83%`
     - `governed-api/governed_api/types.py`: `100%`
 
 ## PR 与代码
@@ -26,23 +26,27 @@
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/2
 - 对应 Git Commit：
   - `d942bae` - `[Phase 2] governed API middleware pipeline`
+  - `bb1765f` - `[Phase 2] docs: add PR link`
+  - R14 修复 commit：待提交
 
 ## Review 状态
 
 - 风险档：高风险。
-- 计划 review：Claude + ChatGPT + Kimi。
+- 三路 review：Claude + ChatGPT + Kimi 已完成。
+- R14：FIX-1 到 FIX-10 已修复，等待复核确认。
 - Review prompt：`docs/review/phase_2_review_prompt.md`
 
 ## 遗留问题 / 风险
 
-- update 精细分级依赖调用方提供 `previous_payload` / `previous_entry` / `changed_fields` / `change_scopes`；Phase 2 不在 classify 段隐式读 storage。缺少 diff 信息时保守 heavy。
+- update 精细分级依赖系统侧提供 `previous_payload` / `previous_entry`；Phase 2 不在 classify 段隐式读 storage。缺少 previous 时保守 heavy。调用方 `changed_fields` / `change_scopes` 只允许升 review，不允许降级。
 - audit V1 只 append JSONL；不做审计查询，不记录完整 diff。
 - `auth_context` 不做登录/session/token；后续 Web/API 层负责。
 - `review_route` 不做 review 队列、审批流或 UI；P5 处理。
+- agent 不能 create/update research 的强制机制留 P6。
+- 失败/拒绝操作也写 audit、同 id 并发 update 乐观锁、persist 重复 validate 性能优化留后续。
 - MCP、research 隔离业务、Web、Collector、Index/Search 均未实现；按 Phase DAG 留给后续阶段。
 
 ## 下一步
 
-- 创建 PR，执行高风险三路 review。
-- 按 R14 闭环 BLOCKER/MAJOR/MINOR。
-- Review 通过后更新本文件状态、PR commit、INDEX，再 merge 和打 checkpoint tag。
+- 等待 R14 复核确认。
+- 复核通过后更新本文件状态、最终 commit、INDEX，再 merge 和打 checkpoint tag。

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +31,23 @@ def write_entry(path: Path, entry: Entry) -> None:
         f"{FRONTMATTER_MARKER}\n"
         f"{entry.body.rstrip()}\n"
     )
-    path.write_text(document, encoding="utf-8", newline="\n")
+    tmp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            newline="\n",
+            dir=path.parent,
+            delete=False,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+        ) as handle:
+            tmp_name = handle.name
+            handle.write(document)
+        os.replace(tmp_name, path)
+    finally:
+        if tmp_name is not None and Path(tmp_name).exists():
+            Path(tmp_name).unlink()
 
 
 def read_frontmatter(path: Path) -> tuple[dict[str, Any], str]:

@@ -41,7 +41,8 @@
 
 3. `classify_write_route` 是否保守且不膨胀：
    - create/propose 没 diff，必须 heavy。
-   - update 没有 `previous_payload` / `previous_entry` / `changed_fields` / `change_scopes` 时，必须 heavy。
+   - update 没有系统侧 `previous_payload` / `previous_entry` 时，必须 heavy。
+   - 调用方自报的 `changed_fields` / `change_scopes` 只能升 review，不得降低按真实 diff 算出的 review level。
    - auto/light/heavy 规则是否符合 design §4.2.1。
    - 是否有把本该 heavy 的 claim/evidence/code_binding 关键变更放成 auto/light 的漏洞。
 
@@ -79,8 +80,8 @@ uv run mypy core tests governed-api
 Success: no issues found in 24 source files
 
 uv run pytest --cov --cov-report=term-missing -q
-76 passed in 5.16s
-Total coverage: 95.50%
+83 passed in 5.06s
+Total coverage: 95.39%
 governed-api/governed_api/middleware.py coverage: 89%
 ```
 
@@ -88,5 +89,5 @@ governed-api/governed_api/middleware.py coverage: 89%
 
 - `auth_context` 不做登录/session/token，只补 role/permissions。
 - `review_route` 只决策分级，不做 review 队列/审批流/UI。
-- update 精细分级依赖调用方提供旧内容或变更标签；Phase 2 不在 classify 段隐式读 storage。
+- update 精细分级依赖系统侧提供旧内容；Phase 2 不在 classify 段隐式读 storage。调用方变更标签只允许升 review。
 - `audit_append` V1 只 append JSONL，不做查询。

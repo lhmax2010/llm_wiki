@@ -18,6 +18,8 @@ def entry_payload(
     claim_type: str = "observation",
     evidence: list[dict[str, object]] | None = None,
     aliases: list[str] | None = None,
+    tags: list[str] | None = None,
+    body: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": 3,
@@ -35,7 +37,8 @@ def entry_payload(
         "author_type": "human",
         "created": "2026-06-15T00:00:00Z",
         "updated": "2026-06-15T00:00:00Z",
-        "body": body_for(),
+        "body": body if body is not None else body_for(),
+        "tags": tags or [],
         "aliases": aliases or [],
     }
     if entry_id is not None:

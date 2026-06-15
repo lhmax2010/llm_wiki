@@ -36,6 +36,12 @@ class RolesConfig:
         permissions = self.permissions_for_role(role)
         return ADMIN_PERMISSION in permissions or permission in permissions
 
+    def permissions_for_user(self, user: str) -> tuple[str, list[str]]:
+        role = self.role_for_user(user)
+        if role is None:
+            raise KeyError(f"unknown user: {user}")
+        return role, self.permissions_for_role(role)
+
 
 def load_roles_config(path: Path) -> RolesConfig:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

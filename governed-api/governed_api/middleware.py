@@ -10,8 +10,8 @@ from pydantic import ValidationError
 from core.id_allocator import IDAllocator
 from core.models import Entry, TrustState
 from core.storage import write_entry
-from core.validation import validate_entry
-from governed_api.audit import append_audit_record, build_audit_record
+from core.validation import ValidationReport, validate_entry
+from governed_api.audit import append_audit_record, build_audit_record, preflight_audit_path
 from governed_api.roles import RolesConfig
 from governed_api.types import (
     ApiError,
@@ -29,6 +29,18 @@ CREATE_OPERATIONS = {"create", "propose", "propose_entry"}
 UPDATE_OPERATIONS = {"update", "propose_update"}
 CONTRIBUTOR_PLUS = {"contributor", "reviewer", "admin"}
 VALID_REVIEW_LEVELS = {"auto", "light", "heavy"}
+REVIEW_LEVEL_RANK: dict[ReviewLevel, int] = {"auto": 0, "light": 1, "heavy": 2}
+OPERATION_PERMISSIONS = {
+    "create": "propose_entry",
+    "propose": "propose_entry",
+    "propose_entry": "propose_entry",
+    "update": "propose_entry",
+    "propose_update": "propose_entry",
+    "create_research": "create_research",
+    "promote_research_to_draft": "promote_research_to_draft",
+    "publish": "publish_entry",
+    "deprecate": "deprecate_entry",
+}
 AUTO_SCOPES = {
     "typo",
     "punctuation",
@@ -95,19 +107,39 @@ def auth_context(roles_config: RolesConfig) -> Middleware:
         if not isinstance(user, str) or not user:
             return fail(context, ApiError("E_PERM", "auth.user is required", "auth.user"))
 
-        role = auth.get("role")
-        if role is None:
-            role = roles_config.role_for_user(user)
-        if not isinstance(role, str) or not role:
-            return fail(context, ApiError("E_PERM", "auth.role is required", "auth.role"))
-
         try:
-            permissions = roles_config.permissions_for_role(role)
+            resolved_role, permissions = roles_config.permissions_for_user(user)
         except KeyError:
-            return fail(context, ApiError("E_PERM", f"unknown role: {role}", "auth.role"))
+            return fail(context, ApiError("E_PERM", f"unknown user: {user}", "auth.user"))
+
+        claimed_role = auth.get("role")
+        if claimed_role is not None and claimed_role != resolved_role:
+            return fail(
+                context,
+                ApiError(
+                    "E_PERM",
+                    "auth.role does not match configured user role",
+                    "auth.role",
+                ),
+            )
+
+        required_permission = OPERATION_PERMISSIONS.get(context["operation"])
+        if (
+            required_permission is not None
+            and "*" not in permissions
+            and required_permission not in permissions
+        ):
+            return fail(
+                context,
+                ApiError(
+                    "E_PERM",
+                    f"permission required: {required_permission}",
+                    "auth.permissions",
+                ),
+            )
 
         next_context: MiddlewareContext = context.copy()
-        next_context["auth"] = {"user": user, "role": role, "permissions": permissions}
+        next_context["auth"] = {"user": user, "role": resolved_role, "permissions": permissions}
         return ok(next_context)
 
     return _auth_context
@@ -116,6 +148,15 @@ def auth_context(roles_config: RolesConfig) -> Middleware:
 def schema_validate(*, allow_id_allocation: bool = True) -> Middleware:
     def _schema_validate(context: MiddlewareContext) -> MiddlewareResult:
         payload = dict(context["payload"])
+        if context["operation"] in CREATE_OPERATIONS and "id" in payload:
+            return fail(
+                context,
+                ApiError(
+                    "E_SCHEMA",
+                    "create/propose payload must not include id; SQLite allocates it",
+                    "payload.id",
+                ),
+            )
         id_was_missing = "id" not in payload
         if id_was_missing:
             if allow_id_allocation and context["operation"] in CREATE_OPERATIONS:
@@ -171,12 +212,7 @@ def evidence_validate() -> Middleware:
         if report.errors:
             return fail(
                 next_context,
-                ApiError(
-                    code="E_VALIDATION",
-                    field="validation_errors",
-                    message="entry validation failed",
-                    details=report.errors,
-                ),
+                _api_error_from_validation_report(report, "entry validation failed"),
             )
         return ok(next_context)
 
@@ -190,6 +226,9 @@ def classify_write_route() -> Middleware:
         review_level = _classify_review_level(context, operation, role)
         target_dir: TargetDir = "entries" if review_level == "auto" else "staging"
         next_context: MiddlewareContext = context.copy()
+        actual_changed_fields = _actual_changed_fields(context)
+        if actual_changed_fields:
+            next_context["actual_changed_fields"] = sorted(actual_changed_fields)
         next_context["review_level"] = review_level
         next_context["target_dir"] = target_dir
         return ok(next_context)
@@ -240,8 +279,25 @@ def persist() -> Middleware:
                 context, ApiError("E_SCHEMA", "id_allocator has invalid type", "id_allocator")
             )
 
+        audit_path = context.get("audit_path", kb_root / "indexes" / "audit.jsonl")
+        try:
+            preflight_audit_path(audit_path)
+        except OSError as exc:
+            return fail(
+                context,
+                ApiError(
+                    "E_SCHEMA",
+                    f"audit path is not writable: {exc}",
+                    "audit_path",
+                ),
+            )
+
         allocated_id: str | None = None
-        if context.get("id_was_missing") or entry.id == PROVISIONAL_ID:
+        if (
+            context["operation"] in CREATE_OPERATIONS
+            or context.get("id_was_missing")
+            or entry.id == PROVISIONAL_ID
+        ):
             allocated_id = allocator.allocate()
             entry = entry.model_copy(update={"id": allocated_id})
 
@@ -253,15 +309,11 @@ def persist() -> Middleware:
         next_context["validation_warnings"] = report.warnings
         if allocated_id is not None:
             next_context["allocated_id"] = allocated_id
+        next_context["audit_path"] = audit_path
         if report.errors:
             return fail(
                 next_context,
-                ApiError(
-                    code="E_VALIDATION",
-                    field="validation_errors",
-                    message="entry validation failed before persist",
-                    details=report.errors,
-                ),
+                _api_error_from_validation_report(report, "entry validation failed before persist"),
             )
 
         write_entry(path, report.entry)
@@ -283,7 +335,14 @@ def audit_append() -> Middleware:
 
         audit_path = context.get("audit_path", kb_root / "indexes" / "audit.jsonl")
         record = build_audit_record(context)
-        append_audit_record(audit_path, record)
+        try:
+            append_audit_record(audit_path, record)
+        except OSError as exc:
+            _rollback_persisted_entry(context)
+            return fail(
+                context,
+                ApiError("E_SCHEMA", f"audit append failed: {exc}", "audit_path"),
+            )
         next_context: MiddlewareContext = context.copy()
         next_context["audit_path"] = audit_path
         next_context["audit_record"] = record
@@ -304,17 +363,28 @@ def _classify_review_level(
     if operation not in UPDATE_OPERATIONS:
         return "heavy"
 
-    scopes = set(context.get("change_scopes", []))
-    if scopes:
-        if scopes & HEAVY_SCOPES:
-            return "heavy"
-        if scopes <= AUTO_SCOPES:
-            return "auto"
-        if scopes <= LIGHT_SCOPES:
-            return "light"
-        return "heavy"
+    actual = _classify_actual_diff(context)
+    claimed = _classify_claimed_change(context)
+    return _max_review_level(actual, claimed)
 
-    changed_fields = _changed_fields(context)
+
+def _actual_changed_fields(context: MiddlewareContext) -> set[str]:
+    entry = context.get("entry")
+    if entry is None:
+        return set()
+    new_payload = entry.model_dump(mode="json")
+    previous_payload = _normalized_previous_payload(context)
+    if previous_payload is None:
+        return set()
+    return {
+        field
+        for field in set(previous_payload) | set(new_payload)
+        if previous_payload.get(field) != new_payload.get(field)
+    }
+
+
+def _classify_actual_diff(context: MiddlewareContext) -> ReviewLevel:
+    changed_fields = _actual_changed_fields(context)
     if not changed_fields:
         return "heavy"
     if changed_fields & HEAVY_FIELDS:
@@ -333,27 +403,26 @@ def _classify_review_level(
     return "heavy"
 
 
-def _changed_fields(context: MiddlewareContext) -> set[str]:
-    explicit = context.get("changed_fields")
-    if explicit is not None:
-        return set(explicit)
+def _classify_claimed_change(context: MiddlewareContext) -> ReviewLevel:
+    claimed_scopes = set(context.get("claimed_change_scopes", context.get("change_scopes", [])))
+    claimed_fields = set(context.get("claimed_changed_fields", context.get("changed_fields", [])))
+    if claimed_scopes & HEAVY_SCOPES or claimed_fields & HEAVY_FIELDS:
+        return "heavy"
+    if claimed_scopes and not claimed_scopes <= LIGHT_SCOPES:
+        return "heavy"
+    if claimed_fields and not claimed_fields <= (AUTO_FIELDS | LIGHT_FIELDS):
+        return "heavy"
+    if claimed_scopes <= AUTO_SCOPES and claimed_fields <= AUTO_FIELDS:
+        return "auto"
+    return "light"
 
-    entry = context.get("entry")
-    if entry is None:
-        return set()
-    new_payload = entry.model_dump(mode="json")
-    previous_payload = _normalized_previous_payload(context)
-    if previous_payload is None:
-        return set()
-    return {
-        field
-        for field in set(previous_payload) | set(new_payload)
-        if previous_payload.get(field) != new_payload.get(field)
-    }
+
+def _max_review_level(left: ReviewLevel, right: ReviewLevel) -> ReviewLevel:
+    return left if REVIEW_LEVEL_RANK[left] >= REVIEW_LEVEL_RANK[right] else right
 
 
 def _credibility_change_is_heavy(context: MiddlewareContext) -> bool:
-    changed_fields = _changed_fields(context)
+    changed_fields = _actual_changed_fields(context)
     if "credibility" not in changed_fields:
         return False
     old, new = _old_new_mapping(context, "credibility")
@@ -369,7 +438,7 @@ def _credibility_change_is_heavy(context: MiddlewareContext) -> bool:
 
 
 def _code_binding_change_is_heavy(context: MiddlewareContext) -> bool:
-    changed_fields = _changed_fields(context)
+    changed_fields = _actual_changed_fields(context)
     if "code_binding" not in changed_fields:
         return False
     old, new = _old_new_mapping(context, "code_binding")
@@ -425,3 +494,21 @@ def _as_list(value: object) -> list[object]:
 def _is_prefix(prefix: Iterable[object], value: list[object]) -> bool:
     prefix_list = list(prefix)
     return len(prefix_list) <= len(value) and value[: len(prefix_list)] == prefix_list
+
+
+def _api_error_from_validation_report(report: ValidationReport, message: str) -> ApiError:
+    if report.errors:
+        primary = report.errors[0]
+        return ApiError(
+            code=primary.code.value,
+            field=primary.field,
+            message=message,
+            details=report.errors,
+        )
+    return ApiError("E_SCHEMA", message, "validation_errors", report.errors)
+
+
+def _rollback_persisted_entry(context: MiddlewareContext) -> None:
+    path = context.get("persisted_path")
+    if path is not None and path.exists():
+        path.unlink()

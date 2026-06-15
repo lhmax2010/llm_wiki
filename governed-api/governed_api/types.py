@@ -55,6 +55,9 @@ class MiddlewareContext(TypedDict, total=False):
     previous_entry: Entry
     changed_fields: list[str]
     change_scopes: list[str]
+    claimed_changed_fields: list[str]
+    claimed_change_scopes: list[str]
+    actual_changed_fields: list[str]
     id_allocator: IDAllocator
     audit_path: Path
     persisted_path: Path

@@ -13,6 +13,11 @@ def build_audit_record(context: MiddlewareContext) -> AuditRecord:
     entry = context["entry"]
     auth = context["auth"]
     persisted_path = context["persisted_path"]
+    kb_root = context["kb_root"]
+    try:
+        relative_path = persisted_path.resolve().relative_to(kb_root.resolve()).as_posix()
+    except ValueError:
+        relative_path = persisted_path.name
     return {
         "timestamp": datetime.now(UTC).isoformat(),
         "user": auth["user"],
@@ -20,8 +25,14 @@ def build_audit_record(context: MiddlewareContext) -> AuditRecord:
         "operation": context["operation"],
         "entry_id": entry.id,
         "target_dir": context["target_dir"],
-        "path": persisted_path.as_posix(),
+        "path": relative_path,
     }
+
+
+def preflight_audit_path(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n"):
+        pass
 
 
 def append_audit_record(path: Path, record: AuditRecord) -> None:

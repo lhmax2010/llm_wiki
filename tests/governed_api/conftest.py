@@ -18,10 +18,18 @@ def roles_config() -> RolesConfig:
         roles={
             "reader": ["read_published"],
             "contributor": ["read_published", "propose_entry"],
-            "reviewer": ["read_published", "propose_entry", "review_light", "review_heavy"],
+            "reviewer": [
+                "read_published",
+                "create_research",
+                "edit_own_research",
+                "propose_entry",
+                "promote_research_to_draft",
+                "review_light",
+                "review_heavy",
+            ],
             "admin": ["*"],
         },
-        users={"alice": "contributor", "reviewer": "reviewer"},
+        users={"alice": "contributor", "reader": "reader", "reviewer": "reviewer"},
     )
 
 
@@ -35,10 +43,16 @@ def make_context(tmp_path: Path) -> Callable[..., MiddlewareContext]:
         user: str = "alice",
         include_roots: bool = True,
     ) -> MiddlewareContext:
+        if payload is None:
+            payload = entry_payload(
+                entry_id=None
+                if operation in {"create", "propose", "propose_entry"}
+                else "KB-2026-0001"
+            )
         context: MiddlewareContext = {
             "auth": {"user": user, "role": role},
             "operation": operation,
-            "payload": payload or entry_payload(),
+            "payload": payload,
         }
         if include_roots:
             kb_root = tmp_path / "kb"
