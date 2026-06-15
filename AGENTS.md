@@ -13,8 +13,14 @@
 - 按 DAG 推进不要问"下一步做什么"。实现细节（命名/文件位置/内部结构）自行决策。
 - 必须暂停问：≥2 实现方案 / 引入升级依赖 / 改公共 API 或跨阶段接口 / 改数据模型 Schema / 调安全模型 / 性能取舍 / 部署变更 / 大范围重构 / 设计与需求矛盾。
 
-## 3. 每 Phase 5 交付物（R3，缺一不可）
-代码+UT / UT报告(覆盖率行≥80%分支≥70%核心≥90%) / docs/dev_memory/phase_N_memory.md / checkpoint tag+登记 / docs/review/phase_N_review_prompt.md + PR。
+## 3. 每 Phase 交付物 + dev_memory 三件套（R3，缺一不可）
+- 代码+UT / UT报告(覆盖率行≥80%分支≥70%核心≥90%) / checkpoint(高风险打tag,低风险记hash) / docs/review/phase_N_review_prompt.md + PR
+- **dev_memory 三件套**（每个 Phase 一个文件夹 `docs/dev_memory/phase_<N>_<名称>/`）：
+  - `plan.md`：开 Phase 时写——目标/范围边界(明确做什么不做什么)/计划步骤/依赖前置
+  - `progress.md`：**开发中持续追加**——关键决策/排除的方案/为什么/进度日志。不等收尾（防事后编造）
+  - `result.md`：收尾写——最终状态/测试覆盖率/PR链接/commit/遗留TODO/下一步
+  - 并更新 `docs/dev_memory/INDEX.md`（phase 总索引）
+- 假设接手的是完全陌生的 AI/工程师，10 分钟能恢复上下文。dev_memory 与代码/git 状态必须一致，不一致立即停下报告。
 
 ## 4. 本项目技术约束
 - 后端 **Python 3.11+**（已冻结，design §2.1，不得自选语言）；类型用 Required/NotRequired（design §4.4）。
@@ -43,6 +49,14 @@
 
 ## 9. Review 闭环（R14）
 BLOCKER 必修才合并；MAJOR 原则必修，不修需开发者显式放行；MINOR 记 dev_memory TODO；NIT 可选。设计类意见走 R1 不直接改 design。
+
+## 9b. 收尾顺序（硬约束，不可跳）
+dev_memory 是仓库内文件，必须随 PR 分支一起提交，不能 merge 后才写。固定顺序：
+1. 前提：端到端验收过 + review 闭环
+2. 写 result.md + 更新 INDEX.md
+3. **先 commit/push 进 PR 分支**（`git add docs/dev_memory/<phase>/result.md docs/dev_memory/INDEX.md`）
+4. 再 merge（有权限+CI过；否则报告阻塞不强合）
+5. 打 checkpoint：先切主分支最终 commit 再打 tag（高风险 tag message 含 PR号+验收摘要；低风险只记 commit hash）
 
 ## 10. 失败 3 次刹车
 同一问题连续修 3 次不过 → 停，输出刹车报告（试过的 3 种方案+各自报错 / 根因猜测 / 需开发者决策的点），等介入，不堆补丁。
