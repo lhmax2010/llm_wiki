@@ -54,6 +54,7 @@ addopts = [
     "--cov=collector",
     "--cov=index",
     "--cov=review",
+    "--cov=research",
     "--cov-report=term-missing",
     "--cov-report=html",
 ]

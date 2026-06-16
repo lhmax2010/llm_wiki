@@ -14,6 +14,7 @@ from core.models import Entry
 from core.storage import write_entry
 from index.search import SearchService
 from mcp.kb_server.handlers import MCPHandlers, ToolError
+from research.store import ResearchRecord, write_research_record
 from tests.governed_api.helpers import body_for, entry_payload
 
 
@@ -389,24 +390,43 @@ def test_propose_update_rejects_invalid_id_before_path_use(handlers: MCPHandlers
     assert result["validation_errors"][0]["field"] == "id"
 
 
-def test_research_hints_is_permissioned_stub(
+def test_research_hints_is_permissioned_opt_in_signal(
     tmp_path: Path,
     roles_config: RolesConfig,
 ) -> None:
+    kb_root = tmp_path / "kb"
+    write_research_record(
+        kb_root / "research" / "R-2026-0001.md",
+        ResearchRecord(
+            id="R-2026-0001",
+            title="Unverified decoder hint",
+            body="decoder raw line should only be a snippet",
+            tags=["decoder"],
+            created="2026-06-16T00:00:00+00:00",
+            updated="2026-06-16T00:00:00+00:00",
+            expires_at="2026-08-15T00:00:00+00:00",
+        ),
+    )
     reviewer = MCPHandlers(
         repo_root=tmp_path,
-        kb_root=tmp_path / "kb",
+        kb_root=kb_root,
         roles_config=roles_config,
         user="reviewer",
     )
     reader = MCPHandlers(
         repo_root=tmp_path,
-        kb_root=tmp_path / "kb",
+        kb_root=kb_root,
         roles_config=roles_config,
         user="reader",
     )
 
-    assert reviewer.search_research_for_hints("decoder") == {"research_signals": []}
+    signals = reviewer.search_research_for_hints("decoder")["research_signals"]
+
+    assert [signal["id"] for signal in signals] == ["R-2026-0001"]
+    assert signals[0]["trust_state"] == "research"
+    assert signals[0]["warning"] == "unverified_research，不可用于判责"
+    assert "snippet" in signals[0]
+    assert "body" not in signals[0]
     with pytest.raises(ToolError) as exc_info:
         reader.search_research_for_hints("decoder")
     assert exc_info.value.code == "E_PERM"

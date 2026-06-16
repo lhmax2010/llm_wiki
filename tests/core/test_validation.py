@@ -521,6 +521,44 @@ def test_invalid_evidence_paths_fail_existence_checks(
     assert _has_issue(report.errors, IssueCode.E_SCHEMA, "attachment_id")
 
 
+def test_research_reference_cannot_be_formal_entry_evidence(
+    make_entry: Callable[..., Entry],
+) -> None:
+    entry = make_entry(
+        claim_type="historical_pattern",
+        evidence=[{"type": "historical_entry", "ref": "R-2026-0001"}],
+    )
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    assert _has_issue(
+        report.errors,
+        IssueCode.E_RESEARCH_AS_EVIDENCE,
+        "credibility.evidence[0]",
+    )
+
+
+def test_research_reference_cannot_be_formal_section_evidence(
+    make_entry: Callable[..., Entry],
+) -> None:
+    entry = make_entry(
+        section_credibility={
+            "?밧썱": {
+                "claim_type": "historical_pattern",
+                "evidence": [{"type": "historical_entry", "ref": "research/R-2026-0001.md"}],
+            }
+        }
+    )
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    assert _has_issue(
+        report.errors,
+        IssueCode.E_RESEARCH_AS_EVIDENCE,
+        "section_credibility.?밧썱.evidence[0]",
+    )
+
+
 def test_bare_log_does_not_keep_fact_claim(make_entry: Callable[..., Entry]) -> None:
     entry = make_entry(claim_type="fact", evidence=[{"type": "log"}])
 

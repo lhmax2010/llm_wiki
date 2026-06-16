@@ -182,9 +182,9 @@ class MCPHandlers:
         return _propose_result(result["context"], result["error"], include_proposed_id=False)
 
     def search_research_for_hints(self, query: str) -> dict[str, list[dict[str, Any]]]:
-        del query
         self._require("search_research_for_hints")
-        return {"research_signals": []}
+        service = self.search_service or SearchService(self.kb_root)
+        return {"research_signals": [dict(signal) for signal in service.search_research(query)]}
 
     def _base_context(
         self,

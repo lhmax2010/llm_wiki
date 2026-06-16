@@ -20,6 +20,7 @@ from core.models import (
 )
 
 ID_PATTERN = re.compile(r"^KB-(?P<year>\d{4})-(?P<number>\d{4})$")
+RESEARCH_ID_PATTERN = re.compile(r"^R-\d{4}-\d{4}$")
 HEX_64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 HEX_16_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 RELATIVE_POSIX_PATH_PATTERN = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$)).+[^/]$")
@@ -85,6 +86,7 @@ def validate_entry(
             section.evidence = mapped.evidence
 
     _validate_evidence_shapes(normalized, report)
+    _validate_research_not_evidence(normalized, report)
     if check_evidence_exists:
         if repo_root is None and _has_evidence_targets_to_check(normalized):
             report.errors.append(
@@ -427,6 +429,38 @@ def _validate_evidence_shapes(entry: Entry, report: ValidationReport) -> None:
                 )
             elif item.type == EvidenceType.REPRO and not (item.excerpt or item.ref):
                 _evidence_schema_error(report, prefix, "repro evidence requires excerpt or ref")
+
+
+def _validate_research_not_evidence(entry: Entry, report: ValidationReport) -> None:
+    for field_name, evidence in _iter_evidence(entry):
+        for index, item in enumerate(evidence):
+            research_ref = _research_reference(item)
+            if research_ref is not None:
+                report.errors.append(
+                    ValidationIssue(
+                        IssueCode.E_RESEARCH_AS_EVIDENCE,
+                        f"{field_name}.evidence[{index}]",
+                        f"research cannot be used as formal evidence: {research_ref}",
+                    )
+                )
+
+
+def _research_reference(evidence: Evidence) -> str | None:
+    for value in (
+        evidence.filepath,
+        evidence.attachment_id,
+        evidence.uri,
+        evidence.ref,
+        evidence.excerpt,
+    ):
+        if value is None:
+            continue
+        normalized = value.replace("\\", "/")
+        if RESEARCH_ID_PATTERN.fullmatch(normalized):
+            return value
+        if normalized.startswith(("research/", "kb/research/")) or "/research/" in normalized:
+            return value
+    return None
 
 
 def _evidence_schema_error(report: ValidationReport, field_name: str, message: str) -> None:

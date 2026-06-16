@@ -21,7 +21,12 @@ from index.sqlite_index import (
     read_valid_entries_from_source,
 )
 from index.synonyms import expand_query_terms, load_synonym_groups
-from index.types import SearchResult, SearchScope
+from index.types import ResearchSignal, SearchResult, SearchScope
+from research.store import (
+    ResearchRecord,
+    read_valid_research_from_source,
+    read_valid_research_record_file,
+)
 
 LOGGER = logging.getLogger(__name__)
 SUPPORT_RANK = {"weak": 0, "moderate": 1, "strong": 2}
@@ -31,27 +36,116 @@ PENDING_DIR = "staging"
 
 @dataclass(frozen=True, slots=True)
 class ResearchSearchIndex:
-    """P4 placeholder for P6 research search.
-
-    The class intentionally shares the query shape with real indexes but does not
-    scan or index kb/research. P6 can replace this implementation behind the same
-    interface once research isolation is implemented.
-    """
+    """Physically isolated research search index."""
 
     name: str = "research_search_index"
+    db_path: Path | None = None
 
     def rebuild(self, kb_root: Path) -> IndexBuildResult:
-        del kb_root
+        db_path = self._db_path(kb_root)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        records, skipped = read_valid_research_from_source(kb_root, context=f"{self.name} rebuild")
+        import sqlite3
+        from contextlib import closing
+        from datetime import UTC, datetime
+
+        with closing(sqlite3.connect(db_path)) as connection:
+            connection.execute("DROP TABLE IF EXISTS index_meta")
+            connection.execute("DROP TABLE IF EXISTS research")
+            connection.execute(
+                """
+                CREATE TABLE index_meta(
+                    name TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    indexed_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE research(
+                    id TEXT PRIMARY KEY,
+                    path TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT INTO index_meta(name, status, indexed_at) VALUES (?, ?, ?)",
+                (self.name, "ready", datetime.now(UTC).isoformat()),
+            )
+            connection.executemany(
+                "INSERT INTO research(id, path) VALUES (?, ?)",
+                [
+                    (
+                        item.record.id,
+                        item.path.resolve().relative_to(kb_root.resolve()).as_posix(),
+                    )
+                    for item in records
+                ],
+            )
+            connection.commit()
         return IndexBuildResult(
             index_name=self.name,
-            indexed_entries=0,
-            skipped_files=0,
-            status="placeholder",
+            indexed_entries=len(records),
+            skipped_files=skipped,
+            status="ready",
         )
 
-    def search(self, query: str) -> list[SearchResult]:
-        del query
-        return []
+    def search(
+        self,
+        kb_root: Path,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        expand_synonyms: bool = True,
+    ) -> list[ResearchSignal]:
+        try:
+            records = self.read_records(kb_root)
+        except IndexUnavailable as exc:
+            LOGGER.warning("research index unavailable, falling back to research scan: %s", exc)
+            records = [
+                item.record
+                for item in read_valid_research_from_source(
+                    kb_root, context="research direct search"
+                )[0]
+            ]
+        return _search_research_records(
+            records,
+            kb_root=kb_root,
+            query=query,
+            expand_synonyms=expand_synonyms,
+            limit=limit,
+            offset=offset,
+        )
+
+    def read_records(self, kb_root: Path) -> list[ResearchRecord]:
+        db_path = self._db_path(kb_root)
+        if not db_path.is_file():
+            raise IndexUnavailable(f"index is not built: {self.name}")
+        import sqlite3
+        from contextlib import closing
+
+        try:
+            with closing(sqlite3.connect(db_path)) as connection:
+                connection.row_factory = sqlite3.Row
+                rows = connection.execute("SELECT path FROM research ORDER BY id").fetchall()
+        except sqlite3.Error as exc:
+            raise IndexUnavailable(f"index is unreadable: {self.name}") from exc
+        records: list[ResearchRecord] = []
+        for row in rows:
+            path = (kb_root / str(row["path"])).resolve()
+            item = read_valid_research_record_file(
+                kb_root,
+                path,
+                context=f"{self.name} indexed read",
+            )
+            if item is not None:
+                records.append(item.record)
+        return records
+
+    def _db_path(self, kb_root: Path) -> Path:
+        return self.db_path or kb_root / "indexes" / self.name / "metadata.sqlite"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,7 +170,9 @@ class SearchService:
 
     @property
     def research_index(self) -> ResearchSearchIndex:
-        return ResearchSearchIndex()
+        return ResearchSearchIndex(
+            db_path=self.kb_root / "indexes" / "research_search_index" / "metadata.sqlite"
+        )
 
     def rebuild_agent_index(self) -> IndexBuildResult:
         return self.agent_index.rebuild(self.kb_root)
@@ -160,8 +256,21 @@ class SearchService:
             sort=sort,
         )
 
-    def search_research(self, query: str) -> list[SearchResult]:
-        return self.research_index.search(query)
+    def search_research(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        offset: int = 0,
+        expand_synonyms: bool = True,
+    ) -> list[ResearchSignal]:
+        return self.research_index.search(
+            self.kb_root,
+            query,
+            limit=limit,
+            offset=offset,
+            expand_synonyms=expand_synonyms,
+        )
 
     def _read_source_entries(self, source_dir: str) -> list[Entry]:
         try:
@@ -347,3 +456,90 @@ def _sort_results(results: list[tuple[Entry, SearchResult]], sort: str) -> list[
             reverse=True,
         )
     ]
+
+
+def _search_research_records(
+    records: list[ResearchRecord],
+    *,
+    kb_root: Path,
+    query: str,
+    expand_synonyms: bool,
+    limit: int,
+    offset: int,
+) -> list[ResearchSignal]:
+    synonym_groups = load_synonym_groups(kb_root / "synonyms.jsonl")
+    terms = expand_query_terms(query, synonym_groups, enabled=expand_synonyms)
+    signals = [
+        _research_signal_for(record, terms=terms, original_query=query)
+        for record in records
+        if _research_matches_query(record, terms)
+    ]
+    signals.sort(key=lambda item: (item.get("score", 0), item["created"], item["id"]), reverse=True)
+    start = max(offset, 0)
+    return signals[start : start + max(limit, 0)]
+
+
+def _research_matches_query(record: ResearchRecord, terms: list[str]) -> bool:
+    if terms == [""]:
+        return True
+    text = _research_search_text(record)
+    return any(_term_matches_text(term, text) for term in terms)
+
+
+def _research_search_text(record: ResearchRecord) -> str:
+    parts = [record.id, record.title, record.module, record.body, *record.tags]
+    return "\n".join(parts).lower()
+
+
+def _research_signal_for(
+    record: ResearchRecord,
+    *,
+    terms: list[str],
+    original_query: str,
+) -> ResearchSignal:
+    return ResearchSignal(
+        {
+            "id": record.id,
+            "title": record.title,
+            "snippet": _research_snippet(record, terms, original_query),
+            "trust_state": "research",
+            "warning": "unverified_research，不可用于判责",
+            "tags": record.tags,
+            "created": record.created,
+            "expires_at": record.expires_at,
+            "score": _research_score(record, terms),
+        }
+    )
+
+
+def _research_snippet(record: ResearchRecord, terms: list[str], original_query: str) -> str:
+    lines = [record.title, *record.body.splitlines()]
+    for term in [original_query, *terms]:
+        normalized = term.strip().lower()
+        if not normalized:
+            continue
+        for line in lines:
+            if normalized in line.lower() or cjk_bigram_match(normalized, line):
+                return line.strip()[:240]
+    return record.title[:240]
+
+
+def _research_score(record: ResearchRecord, terms: list[str]) -> int:
+    if terms == [""]:
+        return 0
+    title = record.title.lower()
+    body = record.body.lower()
+    score = 0
+    for term in terms:
+        normalized = term.strip().lower()
+        if not normalized:
+            continue
+        if normalized in title:
+            score += 10
+        if normalized in body:
+            score += 2
+        if any(normalized in tag.lower() for tag in record.tags):
+            score += 3
+        if cjk_bigram_match(normalized, _research_search_text(record)):
+            score += 1
+    return score

@@ -16,6 +16,7 @@ from governed_api.audit import append_audit_record, build_audit_record, prefligh
 from governed_api.roles import RolesConfig
 from governed_api.types import (
     ApiError,
+    AuthInfo,
     Middleware,
     MiddlewareContext,
     MiddlewareResult,
@@ -40,6 +41,7 @@ OPERATION_PERMISSIONS = {
     "update": "propose_entry",
     "propose_update": "propose_entry",
     "create_research": "create_research",
+    "update_research": "edit_own_research",
     "promote_research_to_draft": "promote_research_to_draft",
     "publish": "publish_entry",
     "deprecate": "deprecate_entry",
@@ -141,8 +143,34 @@ def auth_context(roles_config: RolesConfig) -> Middleware:
                 ),
             )
 
+        if (
+            context["operation"]
+            in {
+                "create_research",
+                "update_research",
+                "promote_research_to_draft",
+            }
+            and auth.get("author_type") == "agent"
+        ):
+            return fail(
+                context,
+                ApiError(
+                    "E_PERM",
+                    "agent cannot create/update/promote research",
+                    "auth.author_type",
+                ),
+            )
+
+        next_auth: AuthInfo = {
+            "user": user,
+            "role": resolved_role,
+            "permissions": permissions,
+        }
+        author_type = auth.get("author_type")
+        if isinstance(author_type, str):
+            next_auth["author_type"] = author_type
         next_context: MiddlewareContext = context.copy()
-        next_context["auth"] = {"user": user, "role": resolved_role, "permissions": permissions}
+        next_context["auth"] = next_auth
         return ok(next_context)
 
     return _auth_context

@@ -15,6 +15,7 @@ def entry_payload(
     *,
     entry_id: str | None = "KB-2026-0001",
     trust_state: str = "pending",
+    title: str = "Decoder failure",
     claim_type: str = "observation",
     evidence: list[dict[str, object]] | None = None,
     aliases: list[str] | None = None,
@@ -24,7 +25,7 @@ def entry_payload(
     payload: dict[str, Any] = {
         "schema_version": 3,
         "entry_type": "defect_case",
-        "title": "Decoder failure",
+        "title": title,
         "module": "decoder",
         "credibility": {
             "claim_type": claim_type,

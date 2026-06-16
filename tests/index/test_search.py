@@ -11,6 +11,7 @@ from core.models import Entry
 from core.storage import write_entry
 from index.search import SearchService
 from index.sqlite_index import IndexUnavailable, SQLiteMetadataIndex
+from research.store import ResearchRecord, write_research_record
 from tests.governed_api.helpers import body_for, entry_payload
 
 
@@ -70,19 +71,23 @@ def test_agent_index_rebuild_skips_entry_with_wrong_trust_state(tmp_path: Path) 
     assert service.search_agent("wrong-state-token") == []
 
 
-def test_research_index_is_placeholder_and_does_not_scan_research(tmp_path: Path) -> None:
+def test_research_index_is_real_and_still_separate_from_agent_index(tmp_path: Path) -> None:
     kb_root = tmp_path / "kb"
     service = SearchService(kb_root)
-    research = entry_payload(entry_id="KB-2026-0002", trust_state="research")
-    research["title"] = "research-only-token"
-    _write_payload(kb_root, "research", research)
+    _write_research(kb_root, "R-2026-0001", title="research-only-token")
 
+    service.rebuild_agent_index()
     result = service.rebuild_research_index()
 
-    assert result.status == "placeholder"
-    assert result.indexed_entries == 0
-    assert service.search_research("research-only-token") == []
-    assert not (kb_root / "indexes" / "research_search_index" / "metadata.sqlite").exists()
+    assert result.status == "ready"
+    assert result.indexed_entries == 1
+    signals = service.search_research("raw research body")
+    assert [signal["id"] for signal in signals] == ["R-2026-0001"]
+    assert signals[0]["trust_state"] == "research"
+    assert signals[0]["warning"] == "unverified_research，不可用于判责"
+    assert "raw research body" in signals[0]["snippet"]
+    assert "body" not in signals[0]
+    assert service.search_agent("research-only-token") == []
 
 
 def test_synonym_expansion_hits_canonical_entry(tmp_path: Path) -> None:
@@ -247,6 +252,30 @@ def test_human_index_interface_is_real_but_still_excludes_research(tmp_path: Pat
     assert service.search_human("research-only-token") == []
 
 
+def test_research_index_rejects_symlink_escape_to_entries(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    _write_payload(
+        kb_root, "entries", entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    )
+    link_path = kb_root / "research" / "R-2026-0001.md"
+    link_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link_path.symlink_to(kb_root / "entries" / "KB-2026-0001.md")
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable on this filesystem: {exc}")
+
+    result = service.rebuild_research_index()
+
+    assert result.indexed_entries == 0
+    assert result.skipped_files == 1
+    assert service.search_research("Decoder") == []
+    assert "outside source dir" in caplog.text
+
+
 def _write_synonyms(kb_root: Path) -> None:
     kb_root.mkdir(parents=True, exist_ok=True)
     (kb_root / "synonyms.jsonl").write_text(
@@ -258,3 +287,18 @@ def _write_synonyms(kb_root: Path) -> None:
 def _write_payload(kb_root: Path, dirname: str, payload: dict[str, Any]) -> None:
     path = kb_root / dirname / f"{payload['id']}.md"
     write_entry(path, Entry.model_validate(payload))
+
+
+def _write_research(kb_root: Path, research_id: str, *, title: str) -> None:
+    write_research_record(
+        kb_root / "research" / f"{research_id}.md",
+        ResearchRecord(
+            id=research_id,
+            title=title,
+            body=f"raw research body {title}",
+            tags=["decoder"],
+            created="2026-06-16T00:00:00+00:00",
+            updated="2026-06-16T00:00:00+00:00",
+            expires_at="2026-08-15T00:00:00+00:00",
+        ),
+    )

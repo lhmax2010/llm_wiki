@@ -88,6 +88,25 @@ def test_auth_context_enforces_operation_permission(
     assert "propose_entry" in allowed["context"]["auth"]["permissions"]
 
 
+def test_auth_context_blocks_agent_research_write_operations(
+    make_context: Callable[..., MiddlewareContext], roles_config: RolesConfig
+) -> None:
+    context = make_context(
+        include_roots=False,
+        operation="create_research",
+        user="reviewer",
+        role="reviewer",
+    )
+    context["auth"]["author_type"] = "agent"
+
+    result = auth_context(roles_config)(context)
+
+    assert not result["ok"]
+    assert result["error"] is not None
+    assert result["error"].code == "E_PERM"
+    assert result["error"].field == "auth.author_type"
+
+
 def test_schema_validate_allows_create_payload_without_id(
     make_context: Callable[..., MiddlewareContext],
 ) -> None:
