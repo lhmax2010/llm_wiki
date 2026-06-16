@@ -32,6 +32,7 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/4
 - 对应 Git Commit：
+  - `e0e9f13` - `[Phase 4] fix: R14 search read-path hardening`
   - `b20061a` - `[Phase 4] index search layer`
   - PR 链接/commit 记录类 docs commit 见 PR 时间线，不作为稳定 code baseline。
 
