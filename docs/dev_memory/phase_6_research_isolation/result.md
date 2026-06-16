@@ -20,8 +20,9 @@
 
 ## PR 与代码
 
-- PR 链接：待创建
-- 对应 Git Commit：待提交
+- PR 链接：https://github.com/lhmax2010/llm_wiki/pull/7
+- 对应 Git Commit：
+  - `d17e3b0` - `[Phase 6] research isolation`
 
 ## Review 状态
 
