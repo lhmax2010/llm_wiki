@@ -79,59 +79,64 @@ REQUIRED_SKILLS: tuple[SkillSpec, ...] = (INGEST_SPEC, MAINTENANCE_SPEC)
 ALLOWED_MCP_TOOLS: frozenset[str] = frozenset(
     {"search_kb", "get_entry", "propose_entry", "propose_update"}
 )
-KNOWN_MCP_TOOLS: frozenset[str] = frozenset(
-    {
-        "search_kb",
-        "get_entry",
-        "list_categories",
-        "browse",
-        "propose_entry",
-        "propose_update",
-        "search_research_for_hints",
-    }
-)
 PROHIBITION_MARKERS: tuple[str, ...] = (
-    "不",
     "不要",
     "不得",
     "不能",
     "不允许",
     "禁止",
     "严禁",
-    "只能",
-    "只允许",
     "绝不",
+    "不可",
+    "不应",
+    "不直接",
+    "不跳过",
+    "不诱导",
+    "不把",
+    "不在",
+    "不因为",
+    "不新增",
 )
-TOOL_RE = re.compile(
-    r"\b(search_kb|get_entry|list_categories|browse|propose_entry|"
-    r"propose_update|search_research_for_hints)\b"
+TOOL_CALL_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+SENSITIVE_TARGET_RE = (
+    r"(?:kb/)?(?:entries|staging|drafts|research|deprecated|indexes)|"
+    r"audit(?:\s+log)?|sqlite|published|trust_state|frontmatter"
+)
+WRITE_ACTION_RE = (
+    r"(?:写入|写|修改|改动|创建|移动|删除|落盘|改|设置|标注|标记|"
+    r"write|edit|modify|create|delete|set)"
+)
+DIRECTIVE_RE = (
+    r"(?:请|务必|必须|应该|可以|允许|需要|建议|不妨|只能|只允许|"
+    r"agent\s*(?:应|可以|必须|should|must|may)|you\s+(?:may|must|should))"
 )
 DANGEROUS_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "DIRECT_KB_WRITE",
         re.compile(
-            r"(?:请|务必|必须|应该|可以|允许|需要|agent\s*(?:应|可以)|you\s+(?:may|must|should))"
-            r".{0,16}(?:直接|手动|自行|自己)?"
-            r".{0,12}(?:写入|写|修改|改动|创建|移动|删除|write|edit|modify|create|delete)"
-            r".{0,32}(?:kb/)?(?:entries|staging|deprecated|indexes|audit|sqlite|published)",
+            rf"(?:"
+            rf"{DIRECTIVE_RE}.{{0,32}}(?:直接|手动|自行|自己)?.{{0,16}}{WRITE_ACTION_RE}"
+            rf"|(?:^|[-*]\s*)(?:直接|手动|自行|自己)?\s*{WRITE_ACTION_RE}"
+            rf").{{0,48}}(?:{SENSITIVE_TARGET_RE})",
             re.IGNORECASE,
         ),
     ),
     (
         "BYPASS_GOVERNANCE",
         re.compile(
-            r"(?:请|务必|必须|应该|可以|允许|需要|agent\s*(?:应|可以)|you\s+(?:may|must|should))"
-            r".{0,16}(?:绕过|跳过|不走|避开|bypass|skip)"
-            r".{0,24}(?:治理|审核|review|MCP|pipeline|propose|P1-P5)",
+            rf"(?:{DIRECTIVE_RE}.{{0,32}}|(?:^|[-*]\s*)?)"
+            r"(?:绕过|跳过|不走|避开|bypass|skip)"
+            r".{0,32}(?:治理|审核|review|MCP|pipeline|propose|P1-P5|"
+            r"查重|权限|RBAC|evidence_validate|schema_validate)",
             re.IGNORECASE,
         ),
     ),
     (
         "SELF_ASSERT_CLAIM_TYPE",
         re.compile(
-            r"(?:请|务必|必须|应该|可以|允许|需要|agent\s*(?:应|可以)|you\s+(?:may|must|should))"
-            r".{0,20}(?:自报|声明|指定|declare|set)"
-            r".{0,20}(?:高可信|fact|spec|claim_type)",
+            rf"(?:{DIRECTIVE_RE}.{{0,32}}|(?:^|[-*]\s*)?)"
+            r"(?:自报|声明|指定|标注|标记为|declare|set)"
+            r".{0,32}(?:高可信|fact|spec|claim_type|support_strength)",
             re.IGNORECASE,
         ),
     ),
@@ -180,13 +185,13 @@ def _validate_required_shape(
 
 def _validate_mcp_tools(path: Path, text: str) -> list[SkillValidationIssue]:
     issues: list[SkillValidationIssue] = []
-    mentioned = {tool for tool in TOOL_RE.findall(text) if tool in KNOWN_MCP_TOOLS}
+    mentioned = set(TOOL_CALL_RE.findall(text))
     for tool in sorted(mentioned - ALLOWED_MCP_TOOLS):
         issues.append(
             SkillValidationIssue(
                 path,
                 "E_TOOL",
-                f"P10a skill must not direct agents to use MCP tool: {tool}",
+                f"P10a skill must not direct agents to use non-whitelisted tool: {tool}",
             )
         )
     return issues
@@ -196,10 +201,12 @@ def _validate_dangerous_instructions(path: Path, text: str) -> list[SkillValidat
     issues: list[SkillValidationIssue] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         normalized = line.strip()
-        if not normalized or _is_prohibition_line(normalized):
+        if not normalized:
             continue
         for code, pattern in DANGEROUS_PATTERNS:
-            if pattern.search(normalized):
+            for match in pattern.finditer(normalized):
+                if _is_prohibited_match(normalized, match.start()):
+                    continue
                 issues.append(
                     SkillValidationIssue(
                         path,
@@ -207,11 +214,13 @@ def _validate_dangerous_instructions(path: Path, text: str) -> list[SkillValidat
                         f"line {line_number} looks like a governance-bypass instruction",
                     )
                 )
+                break
     return issues
 
 
-def _is_prohibition_line(line: str) -> bool:
-    return any(marker in line[:12] for marker in PROHIBITION_MARKERS)
+def _is_prohibited_match(line: str, match_start: int) -> bool:
+    prefix = line[max(0, match_start - 16) : match_start + 8]
+    return any(marker in prefix for marker in PROHIBITION_MARKERS)
 
 
 def format_issues(issues: Sequence[SkillValidationIssue]) -> str:
