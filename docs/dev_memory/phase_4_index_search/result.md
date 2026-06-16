@@ -2,7 +2,7 @@
 
 ## 最终状态
 
-待 Merge。Phase 4 索引 + 检索 V1 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-7），两个 BLOCKER 修法已复核通过，当前 PR #4 等待 merge。
+已 Merge。Phase 4 索引 + 检索 V1 已通过 PR #4 合并到 `main`；三路 review 后的 R14 修复（FIX-1 到 FIX-7）已闭环，两个 BLOCKER 修法已复核通过。checkpoint tag：`checkpoint/phase_4_index_search`。
 
 ## 测试情况
 
@@ -32,9 +32,10 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/4
 - 对应 Git Commit：
+  - `8c33dbd` - `Merge pull request #4 from lhmax2010/phase/4-index-search`
+  - `053a5b5` - `[Phase 4] docs: dev_memory 收尾`
   - `e0e9f13` - `[Phase 4] fix: R14 search read-path hardening`
   - `b20061a` - `[Phase 4] index search layer`
-  - PR 链接/commit 记录类 docs commit 见 PR 时间线，不作为稳定 code baseline。
 
 ## Review 状态
 
