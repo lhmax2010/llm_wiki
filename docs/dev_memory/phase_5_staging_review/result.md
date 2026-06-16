@@ -26,6 +26,7 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/5
 - 对应 Git Commit：
+  - `cdb4237` - `[Phase 5] fix: R14 instruction file follow-up`
   - `9688394` - `[Phase 5] fix: R14 review closure`
   - `47513ca` - `[Phase 5] staging review lifecycle`
 
