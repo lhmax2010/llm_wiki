@@ -21,8 +21,9 @@
 
 ## PR 与代码
 
-- PR 链接：待创建
-- 对应 Git Commit：待提交
+- PR 链接：https://github.com/lhmax2010/llm_wiki/pull/6
+- 对应 Git Commit：
+  - `a5102d3` - `[Phase 10a] skill contracts + validator`
 
 ## Review 状态
 
