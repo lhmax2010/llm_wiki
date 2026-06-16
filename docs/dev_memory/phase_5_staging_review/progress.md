@@ -68,7 +68,7 @@
 
 ## TODO
 
-- 多 reviewer 并发已用 per-entry lock 收紧；后续可升级到 SQLite review state CAS，顺便支持 stale lock 清理。
+- 多 reviewer 并发已用 per-entry lock 收紧；硬崩/断电时 `kb/indexes/review_locks/<id>.lock` 可能残留，导致该 id 后续 review 持续 `E_DUP`，可手动删除对应 `.lock` 恢复；后续可升级到锁超时/PID 检查或 SQLite review state CAS。
 - crash recovery：如果 target 已写入且 audit/cleanup 中途 crash，后续需要维护脚本扫描“entries/deprecated 有终态但 audit 缺 review_approve/review_reject”的异常。
 - approve/reject 后索引不会自动增量刷新；P4 当前仍依赖 rebuild/fallback，后续可在 review service 成功后触发 index invalidation/rebuild hook。
 - `deprecated/` 中 reject 与 published 后 deprecate 当前靠 audit 区分；如果 Web UI 需要直接筛选，可后续增加只读索引视图，不改 Entry schema。
