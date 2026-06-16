@@ -465,6 +465,7 @@ def test_persist_allocates_id_writes_entry_and_audit(
     assert audit["entry_id"] == "KB-2026-0001"
     assert audit["target_dir"] == "staging"
     assert audit["path"] == "staging/KB-2026-0001.md"
+    assert audit["review_level"] == "heavy"
     assert not Path(audit["path"]).is_absolute()
 
 
