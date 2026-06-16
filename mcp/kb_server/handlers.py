@@ -32,6 +32,7 @@ from pydantic import ValidationError
 from core.id_allocator import IDAllocator
 from core.models import Entry
 from core.storage import read_entry
+from index import IndexUnavailable, SearchService
 from mcp.kb_server.types import ProposeResult, SearchResult, SearchScope
 
 LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class MCPHandlers:
     id_allocator: IDAllocator | None = None
     audit_path: Path | None = None
     pipeline_steps: tuple[Middleware, ...] | None = None
+    search_service: SearchService | None = None
 
     def search_kb(
         self,
@@ -77,8 +79,20 @@ class MCPHandlers:
         offset: int = 0,
         sort: str = "score",
     ) -> list[SearchResult]:
-        del expand_synonyms  # P4 owns synonym expansion; P3 keeps the signature stable.
         self._require("read_published")
+        service = self.search_service or SearchService(self.kb_root)
+        try:
+            return service.search_agent(
+                query,
+                scope=scope,
+                include_pending=include_pending,
+                expand_synonyms=expand_synonyms,
+                limit=limit,
+                offset=offset,
+                sort=sort,
+            )
+        except IndexUnavailable as exc:
+            LOGGER.warning("search index unavailable, falling back to directory scan: %s", exc)
         scope = scope or {}
         matched_results: list[tuple[Entry, SearchResult]] = []
         for entry in self._scan_entries(include_pending=include_pending):

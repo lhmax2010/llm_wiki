@@ -2,30 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, Required, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
+from index.types import SearchResult as SearchResult
+from index.types import SearchScope as SearchScope
 
-class SearchScope(TypedDict, total=False):
-    module: str
-    entry_type: str
-    error_code: str
-    claim_type: str
-    min_support: str
-    exclude_stale: bool
-    status: str
-
-
-class SearchResult(TypedDict, total=False):
-    id: Required[str]
-    title: Required[str]
-    entry_type: Required[str]
-    module: Required[str]
-    snippet: Required[str]
-    matched_section: str | None
-    credibility: Required[dict[str, Any]]
-    trust_state: Required[str]
-    stale: bool
-    score: int
+__all__ = [
+    "ProposeResult",
+    "SearchResult",
+    "SearchScope",
+    "ToolCallResult",
+    "ToolDescriptor",
+]
 
 
 class ProposeResult(TypedDict, total=False):
