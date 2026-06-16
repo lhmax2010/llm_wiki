@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,22 @@ def test_review_queue_skips_invalid_state_and_published_duplicate(
     assert queue.items == ()
     assert queue.skipped_files == 2
     assert "unexpected trust_state" in caplog.text
-    assert "published entry exists" in caplog.text
+    assert "terminal entry exists" in caplog.text
+
+
+def test_review_queue_skips_when_any_terminal_state_exists(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _write_entry(kb_root, "deprecated", "KB-2026-0001", trust_state="deprecated")
+    caplog.set_level(logging.WARNING, logger="review.service")
+
+    queue = list_review_queue(kb_root=kb_root, repo_root=tmp_path)
+
+    assert queue.items == ()
+    assert queue.skipped_files == 1
+    assert "terminal entry exists" in caplog.text
 
 
 def test_review_queue_reports_backlog_warning(tmp_path: Path) -> None:
@@ -235,12 +251,48 @@ def test_review_rejects_bad_id_and_missing_or_invalid_staging_entry(
     assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
 
 
-def test_review_refuses_to_overwrite_existing_target(
+def test_review_refuses_transition_when_any_terminal_state_exists(
     tmp_path: Path, review_roles: RolesConfig
 ) -> None:
     kb_root = tmp_path / "kb"
     _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
     existing = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    _write_entry(kb_root, "staging", "KB-2026-0002", trust_state="pending")
+    _write_entry(kb_root, "deprecated", "KB-2026-0002", trust_state="deprecated")
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+    deprecated_result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0002",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.code == "E_DUP"
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").updated == existing.updated
+    assert not deprecated_result.ok
+    assert deprecated_result.error is not None
+    assert deprecated_result.error.code == "E_DUP"
+    assert (kb_root / "staging" / "KB-2026-0002.md").exists()
+
+
+def test_review_lock_blocks_concurrent_transition(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    lock_dir = kb_root / "indexes" / "review_locks"
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "KB-2026-0001.lock").write_text("already running\n", encoding="utf-8")
 
     result = approve_staging_entry(
         kb_root=kb_root,
@@ -253,7 +305,68 @@ def test_review_refuses_to_overwrite_existing_target(
     assert not result.ok
     assert result.error is not None
     assert result.error.code == "E_DUP"
-    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").updated == existing.updated
+    assert (kb_root / "staging" / "KB-2026-0001.md").exists()
+    assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
+
+
+def test_state_directory_symlink_is_rejected(tmp_path: Path, review_roles: RolesConfig) -> None:
+    kb_root = tmp_path / "kb"
+    outside = tmp_path / "outside-staging"
+    kb_root.mkdir()
+    outside.mkdir()
+    try:
+        os.symlink(outside, kb_root / "staging", target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink not available on this host: {exc}")
+
+    queue = list_review_queue(kb_root=kb_root, repo_root=tmp_path)
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert queue.items == ()
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.field == "entry_id"
+
+
+def test_reject_can_dispose_entry_with_stale_code_evidence(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    entry = _write_entry(
+        kb_root,
+        "staging",
+        "KB-2026-0001",
+        trust_state="pending",
+        claim_type="static_inference",
+        evidence=[{"type": "code", "filepath": "src/missing.c"}],
+    )
+
+    approved = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id=entry.id,
+    )
+    rejected = reject_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id=entry.id,
+    )
+
+    assert not approved.ok
+    assert approved.error is not None
+    assert approved.error.code == "E_SCHEMA"
+    assert rejected.ok, rejected.error
+    assert read_entry(kb_root / "deprecated" / "KB-2026-0001.md").trust_state == "deprecated"
 
 
 def test_audit_append_failure_rolls_back_target_and_keeps_staging(
@@ -309,17 +422,45 @@ def test_source_cleanup_failure_is_reported_after_audited_publish(
         entry_id="KB-2026-0001",
     )
 
-    assert not result.ok
-    assert result.error is not None
-    assert result.error.field == "source_path"
+    assert result.ok
+    assert result.error is None
+    assert result.warning is not None
+    assert result.warning.field == "source_path"
     assert (kb_root / "entries" / "KB-2026-0001.md").exists()
     assert (kb_root / "staging" / "KB-2026-0001.md").exists()
     assert "source cleanup failed" in caplog.text
     assert _last_audit(kb_root)["operation"] == "review_approve"
 
 
-def _write_entry(kb_root: Path, directory: str, entry_id: str, *, trust_state: str) -> Entry:
-    payload = entry_payload(entry_id=entry_id, trust_state=trust_state)
+def test_entry_id_validation_uses_fullmatch(tmp_path: Path, review_roles: RolesConfig) -> None:
+    result = approve_staging_entry(
+        kb_root=tmp_path / "kb",
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001\n",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.field == "entry_id"
+
+
+def _write_entry(
+    kb_root: Path,
+    directory: str,
+    entry_id: str,
+    *,
+    trust_state: str,
+    claim_type: str = "observation",
+    evidence: list[dict[str, object]] | None = None,
+) -> Entry:
+    payload = entry_payload(
+        entry_id=entry_id,
+        trust_state=trust_state,
+        claim_type=claim_type,
+        evidence=evidence,
+    )
     entry = Entry.model_validate(payload)
     write_entry(kb_root / directory / f"{entry_id}.md", entry)
     return entry

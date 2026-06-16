@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -59,6 +60,7 @@ class ReviewOperationResult:
     ok: bool
     error: ApiError | None
     entry: Entry | None = None
+    warning: ApiError | None = None
     review_level: ReviewLevel | None = None
     source_path: Path | None = None
     target_path: Path | None = None
@@ -76,7 +78,11 @@ def list_review_queue(
     levels = _review_levels_from_audit(audit_path or _default_audit_path(kb_root))
     items: list[ReviewQueueItem] = []
     skipped = 0
-    staging_root = _source_root(kb_root, "staging")
+    try:
+        staging_root = _source_root(kb_root, "staging")
+    except ValueError as exc:
+        LOGGER.warning("review queue: invalid staging root (%s)", exc)
+        return ReviewQueue(items=(), backlog_count=0, backlog_warning=False, skipped_files=0)
     if not staging_root.exists():
         return ReviewQueue(items=(), backlog_count=0, backlog_warning=False, skipped_files=0)
 
@@ -86,10 +92,12 @@ def list_review_queue(
             LOGGER.warning("review queue: skipping invalid staging filename: %s", candidate)
             skipped += 1
             continue
-        if _target_path(kb_root, "entries", entry_id).exists():
+        terminal_path = _terminal_entry_path(kb_root, entry_id)
+        if terminal_path is not None:
             LOGGER.warning(
-                "review queue: skipping staging residue because published entry exists: %s",
+                "review queue: skipping staging residue because terminal entry exists: %s (%s)",
                 entry_id,
+                terminal_path,
             )
             skipped += 1
             continue
@@ -202,21 +210,75 @@ def _review_transition(
     except OSError as exc:
         return _failed("E_SCHEMA", f"audit path is not writable: {exc}", "audit_path")
 
+    try:
+        terminal_path = _terminal_entry_path(kb_root, entry_id)
+    except ValueError as exc:
+        return _failed("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
+    if terminal_path is not None:
+        return _failed("E_DUP", f"terminal entry already exists: {terminal_path}", "entry_id")
+
+    try:
+        lock_path = _acquire_review_lock(kb_root, entry_id)
+    except FileExistsError:
+        return _failed("E_DUP", "review already in progress for entry", "entry_id")
+    except OSError as exc:
+        return _failed("E_SCHEMA", f"review lock cannot be acquired: {exc}", "entry_id")
+    except ValueError as exc:
+        return _failed("E_SCHEMA", f"invalid review lock path: {exc}", "kb_root")
+
+    try:
+        return _locked_review_transition(
+            kb_root=kb_root,
+            repo_root=repo_root,
+            roles_config=roles_config,
+            reviewer=reviewer,
+            entry_id=entry_id,
+            decision=decision,
+            target_dir=target_dir,
+            target_state=target_state,
+            note=note,
+            review_level=review_level,
+            resolved_audit_path=resolved_audit_path,
+        )
+    finally:
+        _release_review_lock(lock_path)
+
+
+def _locked_review_transition(
+    *,
+    kb_root: Path,
+    repo_root: Path,
+    roles_config: RolesConfig,
+    reviewer: str,
+    entry_id: str,
+    decision: ReviewDecision,
+    target_dir: Literal["entries", "deprecated"],
+    target_state: TrustState,
+    note: str | None,
+    review_level: ReviewLevel,
+    resolved_audit_path: Path,
+) -> ReviewOperationResult:
+    try:
+        terminal_path = _terminal_entry_path(kb_root, entry_id)
+    except ValueError as exc:
+        return _failed("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
+    if terminal_path is not None:
+        return _failed("E_DUP", f"terminal entry already exists: {terminal_path}", "entry_id")
+
+    check_evidence_exists = decision == "approve"
     loaded = _load_entry_for_state(
         kb_root=kb_root,
         repo_root=repo_root,
         source_dir="staging",
         entry_id=entry_id,
         expected_state=TrustState.PENDING,
+        check_evidence_exists=check_evidence_exists,
     )
     if loaded is None:
         return _failed("E_SCHEMA", "staging entry not found or invalid", "entry_id")
     source_entry, source_path = loaded
 
     target_path = _target_path(kb_root, target_dir, entry_id)
-    if target_path.exists():
-        return _failed("E_DUP", f"target entry already exists: {target_path}", "entry_id")
-
     reviewed = source_entry.model_copy(
         update={
             "trust_state": target_state,
@@ -229,6 +291,7 @@ def _review_transition(
         repo_root=repo_root,
         kb_root=kb_root,
         entry_path=target_path,
+        check_evidence_exists=check_evidence_exists,
     )
     if not target_report.ok:
         return _failed(
@@ -249,6 +312,7 @@ def _review_transition(
         source_dir=target_dir,
         entry_id=entry_id,
         expected_state=target_state,
+        check_evidence_exists=check_evidence_exists,
     )
     if post_write is None:
         _rollback_target(target_path)
@@ -280,13 +344,15 @@ def _review_transition(
             source_path,
             exc,
         )
+        warning = ApiError(
+            "E_SCHEMA",
+            f"review source cleanup failed: {exc}",
+            "source_path",
+        )
         return ReviewOperationResult(
-            ok=False,
-            error=ApiError(
-                "E_SCHEMA",
-                f"review source cleanup failed: {exc}",
-                "source_path",
-            ),
+            ok=True,
+            error=None,
+            warning=warning,
             entry=reviewed,
             review_level=review_level,
             source_path=source_path,
@@ -312,6 +378,7 @@ def _load_entry_for_state(
     source_dir: Literal["staging", "entries", "deprecated"],
     entry_id: str,
     expected_state: TrustState,
+    check_evidence_exists: bool = True,
 ) -> tuple[Entry, Path] | None:
     try:
         path = _existing_entry_path(kb_root, source_dir, entry_id)
@@ -337,7 +404,13 @@ def _load_entry_for_state(
             entry.trust_state,
         )
         return None
-    report = validate_entry(entry, repo_root=repo_root, kb_root=kb_root, entry_path=path)
+    report = validate_entry(
+        entry,
+        repo_root=repo_root,
+        kb_root=kb_root,
+        entry_path=path,
+        check_evidence_exists=check_evidence_exists,
+    )
     if not report.ok:
         issues = "; ".join(
             f"{issue.code.value}:{issue.field}:{issue.message}" for issue in report.errors
@@ -383,15 +456,30 @@ def _target_path(
     return path
 
 
+def _terminal_entry_path(kb_root: Path, entry_id: str) -> Path | None:
+    for terminal_dir in ("entries", "deprecated"):
+        path = _target_path(kb_root, terminal_dir, entry_id)
+        if path.exists():
+            return path
+    return None
+
+
 def _source_root(
     kb_root: Path,
-    source_dir: Literal["staging", "entries", "deprecated"],
+    source_dir: Literal["staging", "entries", "deprecated", "indexes"],
 ) -> Path:
-    return (kb_root.resolve() / source_dir).resolve()
+    root = kb_root.resolve()
+    source_path = root / source_dir
+    if source_path.exists() and source_path.is_symlink():
+        raise ValueError(f"{source_dir} directory must not be a symlink")
+    resolved = source_path.resolve()
+    if not resolved.is_relative_to(root):
+        raise ValueError(f"{source_dir} directory escapes kb root")
+    return resolved
 
 
 def _valid_entry_id(entry_id: str) -> bool:
-    return ID_PATTERN.match(entry_id) is not None
+    return ID_PATTERN.fullmatch(entry_id) is not None
 
 
 def _queue_item(
@@ -515,6 +603,30 @@ def _rollback_target(path: Path) -> None:
             path,
             exc,
         )
+
+
+def _acquire_review_lock(kb_root: Path, entry_id: str) -> Path:
+    root = kb_root.resolve()
+    lock_dir = _source_root(kb_root, "indexes") / "review_locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    resolved_lock_dir = lock_dir.resolve()
+    if not resolved_lock_dir.is_relative_to(root):
+        raise ValueError("review lock directory escapes kb root")
+    lock_path = resolved_lock_dir / f"{entry_id}.lock"
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    descriptor = os.open(lock_path, flags)
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(f"{datetime.now(UTC).isoformat()}\n")
+    return lock_path
+
+
+def _release_review_lock(lock_path: Path) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        LOGGER.error("review lock cleanup failed: %s (%s)", lock_path, exc)
 
 
 def _default_audit_path(kb_root: Path) -> Path:

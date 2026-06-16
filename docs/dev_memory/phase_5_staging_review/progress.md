@@ -71,3 +71,31 @@
 - 多 reviewer 并发审批时，后续可以加文件锁或 SQLite review state CAS，避免目标存在检查和写入之间的竞态。
 - approve/reject 后索引不会自动增量刷新；P4 当前仍依赖 rebuild/fallback，后续可在 review service 成功后触发 index invalidation/rebuild hook。
 - `deprecated/` 中 reject 与 published 后 deprecate 当前靠 audit 区分；如果 Web UI 需要直接筛选，可后续增加只读索引视图，不改 Entry schema。
+
+## R14 Review Closure
+
+- 根因总纲：Phase 5 是发布闸门，必须同时保证“终态唯一性”和“目录边界”。一个 entry id 只能处于一个终态（`entries/` 或 `deprecated/`），任何状态目录 resolve 后都必须仍在 `kb_root` 内，不能让 symlink 把发布/废弃路径带出 KB。
+
+- FIX-1 [BLOCKER] 终态互斥破坏。
+  - 修复：transition 前同时检查 `entries/<id>.md` 和 `deprecated/<id>.md`，任一存在即 `E_DUP`。
+  - 修复：queue 也把任一终态存在视为 staging residue，跳过并 warning。
+  - 修复：新增 per-entry lock，使用 `kb/indexes/review_locks/<id>.lock` + `O_CREAT|O_EXCL` 原子认领；锁内再次检查终态，堵住并发 TOCTOU。
+  - 测试：`test_review_queue_skips_when_any_terminal_state_exists`、`test_review_refuses_transition_when_any_terminal_state_exists`、`test_review_lock_blocks_concurrent_transition`。
+
+- FIX-2 [BLOCKER] 状态目录 symlink 逃逸。
+  - 修复：`_source_root()` 现在先 resolve `kb_root`，拒绝三态目录自身是 symlink，并确认 resolved source root `is_relative_to(kb_root)`。
+  - 测试：`test_state_directory_symlink_is_rejected`。
+
+- FIX-3 [MAJOR] reject 无法处置失效条目。
+  - 修复：reject 路径仍要求 Entry 可读、id/state/目录一致，但 `validate_entry(..., check_evidence_exists=False)`；approve 仍保持完整 evidence existence validation。
+  - 测试：`test_reject_can_dispose_entry_with_stale_code_evidence`。
+
+- FIX-4 [MINOR] 源清理失败语义。
+  - 修复：audit 已成功且 target 已写入时，source cleanup 失败返回 `ok=True` 并带 `warning`，同时写 error log；不再用 `ok=False` 误导上游重试造成重复操作。
+  - 测试：`test_source_cleanup_failure_is_reported_after_audited_publish`。
+
+- FIX-5 [MINOR] id regex。
+  - 修复：`_valid_entry_id()` 从 `match()` 改为 `fullmatch()`。
+  - 测试：`test_entry_id_validation_uses_fullmatch`。
+
+- TODO：`review_level` 权威源当前来自可变 audit 日志，内网信任模型下暂不阻塞，但它既可篡改也不适合作为长期高性能查询源。后续应通过 R1 设计变更，把 review routing metadata 持久化到受校验的 frontmatter 或独立 SQLite review state 表。
