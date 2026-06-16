@@ -68,6 +68,23 @@ def test_review_queue_defaults_unknown_review_level_to_heavy(tmp_path: Path) -> 
     assert queue.items[0].review_level == "heavy"
 
 
+def test_review_queue_includes_entry_with_stale_code_evidence(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(
+        kb_root,
+        "staging",
+        "KB-2026-0001",
+        trust_state="pending",
+        claim_type="static_inference",
+        evidence=[{"type": "code", "filepath": "src/missing.c"}],
+    )
+
+    queue = list_review_queue(kb_root=kb_root, repo_root=tmp_path)
+
+    assert queue.backlog_count == 1
+    assert queue.items[0].entry_id == "KB-2026-0001"
+
+
 def test_review_queue_skips_invalid_state_and_published_duplicate(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -334,6 +351,42 @@ def test_state_directory_symlink_is_rejected(tmp_path: Path, review_roles: Roles
     assert result.error.field == "entry_id"
 
 
+def test_terminal_directory_symlink_is_rejected(tmp_path: Path, review_roles: RolesConfig) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    outside_entries = tmp_path / "outside-entries"
+    outside_deprecated = tmp_path / "outside-deprecated"
+    outside_entries.mkdir()
+    outside_deprecated.mkdir()
+    try:
+        os.symlink(outside_entries, kb_root / "entries", target_is_directory=True)
+        os.symlink(outside_deprecated, kb_root / "deprecated", target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"directory symlink not available on this host: {exc}")
+
+    approve_result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+    reject_result = reject_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert not approve_result.ok
+    assert approve_result.error is not None
+    assert approve_result.error.field == "kb_root"
+    assert not reject_result.ok
+    assert reject_result.error is not None
+    assert reject_result.error.field == "kb_root"
+
+
 def test_reject_can_dispose_entry_with_stale_code_evidence(
     tmp_path: Path, review_roles: RolesConfig
 ) -> None:
@@ -345,6 +398,40 @@ def test_reject_can_dispose_entry_with_stale_code_evidence(
         trust_state="pending",
         claim_type="static_inference",
         evidence=[{"type": "code", "filepath": "src/missing.c"}],
+    )
+
+    approved = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id=entry.id,
+    )
+    rejected = reject_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id=entry.id,
+    )
+
+    assert not approved.ok
+    assert approved.error is not None
+    assert approved.error.code == "E_SCHEMA"
+    assert rejected.ok, rejected.error
+    assert read_entry(kb_root / "deprecated" / "KB-2026-0001.md").trust_state == "deprecated"
+
+
+def test_reject_can_dispose_entry_with_invalid_body(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    entry = _write_entry(
+        kb_root,
+        "staging",
+        "KB-2026-0001",
+        trust_state="pending",
+        body="## incomplete\ninvalid skeleton",
     )
 
     approved = approve_staging_entry(
@@ -425,7 +512,7 @@ def test_source_cleanup_failure_is_reported_after_audited_publish(
     assert result.ok
     assert result.error is None
     assert result.warning is not None
-    assert result.warning.field == "source_path"
+    assert result.warning.field == "staging_residue"
     assert (kb_root / "entries" / "KB-2026-0001.md").exists()
     assert (kb_root / "staging" / "KB-2026-0001.md").exists()
     assert "source cleanup failed" in caplog.text
@@ -454,12 +541,14 @@ def _write_entry(
     trust_state: str,
     claim_type: str = "observation",
     evidence: list[dict[str, object]] | None = None,
+    body: str | None = None,
 ) -> Entry:
     payload = entry_payload(
         entry_id=entry_id,
         trust_state=trust_state,
         claim_type=claim_type,
         evidence=evidence,
+        body=body,
     )
     entry = Entry.model_validate(payload)
     write_entry(kb_root / directory / f"{entry_id}.md", entry)

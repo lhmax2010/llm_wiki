@@ -68,7 +68,8 @@
 
 ## TODO
 
-- 多 reviewer 并发审批时，后续可以加文件锁或 SQLite review state CAS，避免目标存在检查和写入之间的竞态。
+- 多 reviewer 并发已用 per-entry lock 收紧；后续可升级到 SQLite review state CAS，顺便支持 stale lock 清理。
+- crash recovery：如果 target 已写入且 audit/cleanup 中途 crash，后续需要维护脚本扫描“entries/deprecated 有终态但 audit 缺 review_approve/review_reject”的异常。
 - approve/reject 后索引不会自动增量刷新；P4 当前仍依赖 rebuild/fallback，后续可在 review service 成功后触发 index invalidation/rebuild hook。
 - `deprecated/` 中 reject 与 published 后 deprecate 当前靠 audit 区分；如果 Web UI 需要直接筛选，可后续增加只读索引视图，不改 Entry schema。
 
@@ -84,14 +85,15 @@
 
 - FIX-2 [BLOCKER] 状态目录 symlink 逃逸。
   - 修复：`_source_root()` 现在先 resolve `kb_root`，拒绝三态目录自身是 symlink，并确认 resolved source root `is_relative_to(kb_root)`。
-  - 测试：`test_state_directory_symlink_is_rejected`。
+  - 测试：`test_state_directory_symlink_is_rejected`、`test_terminal_directory_symlink_is_rejected`。
 
 - FIX-3 [MAJOR] reject 无法处置失效条目。
-  - 修复：reject 路径仍要求 Entry 可读、id/state/目录一致，但 `validate_entry(..., check_evidence_exists=False)`；approve 仍保持完整 evidence existence validation。
-  - 测试：`test_reject_can_dispose_entry_with_stale_code_evidence`。
+  - 修复：queue 使用 `validate_entry(..., check_evidence_exists=False)`，让 stale evidence 条目仍能进入待审队列。
+  - 修复：reject 路径只要求 Entry 可读、id 与文件名一致、`trust_state=pending`、路径位于 staging；不跑完整 schema/evidence 校验。approve 仍保持完整 validation。
+  - 测试：`test_review_queue_includes_entry_with_stale_code_evidence`、`test_reject_can_dispose_entry_with_stale_code_evidence`、`test_reject_can_dispose_entry_with_invalid_body`。
 
 - FIX-4 [MINOR] 源清理失败语义。
-  - 修复：audit 已成功且 target 已写入时，source cleanup 失败返回 `ok=True` 并带 `warning`，同时写 error log；不再用 `ok=False` 误导上游重试造成重复操作。
+  - 修复：audit 已成功且 target 已写入时，source cleanup 失败返回 `ok=True` 并带 `warning.field=staging_residue`，同时写 error log；不再用 `ok=False` 误导上游重试造成重复操作。
   - 测试：`test_source_cleanup_failure_is_reported_after_audited_publish`。
 
 - FIX-5 [MINOR] id regex。

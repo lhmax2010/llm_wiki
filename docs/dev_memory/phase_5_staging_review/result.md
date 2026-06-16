@@ -11,11 +11,11 @@
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests governed-api mcp index scripts review` -> `Success: no issues found in 45 source files`
 - 单测 + 覆盖率：
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `136 passed in 9.14s`
-  - Total coverage: `92.65%`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `139 passed in 9.51s`
+  - Total coverage: `92.72%`
   - touched review/governed files coverage snapshot:
     - `review/__init__.py`: `100%`
-    - `review/service.py`: `80%`
+    - `review/service.py`: `81%`
     - `governed-api/governed_api/audit.py`: `90%`
     - `governed-api/governed_api/types.py`: `100%`
 - 集成/端到端验收：
@@ -36,8 +36,8 @@
 - R14 修复状态：
   - FIX-1 BLOCKER：终态互斥 + per-entry lock。
   - FIX-2 BLOCKER：状态目录 symlink/escape 防护。
-  - FIX-3 MAJOR：reject 放宽 evidence existence，用作失效条目处置路径。
-  - FIX-4 MINOR：源清理失败改为 ok + warning。
+  - FIX-3 MAJOR：reject 放宽为 id/state/read 处置路径，queue 不因 stale evidence 隐藏条目。
+  - FIX-4 MINOR：源清理失败改为 ok + `warning.field=staging_residue`。
   - FIX-5 MINOR：id regex 改 fullmatch。
 - Review prompt：`docs/review/phase_5_review_prompt.md`
 

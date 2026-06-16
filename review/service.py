@@ -32,6 +32,7 @@ PUBLISH_PERMISSION = "publish_entry"
 DEPRECATE_PERMISSION = "deprecate_entry"
 VALID_QUEUE_LEVELS: set[ReviewLevel] = {"light", "heavy"}
 ReviewDecision = Literal["approve", "reject"]
+ValidationMode = Literal["full", "no_evidence", "state_only"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +108,7 @@ def list_review_queue(
             source_dir="staging",
             entry_id=entry_id,
             expected_state=TrustState.PENDING,
+            validation_mode="no_evidence",
         )
         if loaded is None:
             skipped += 1
@@ -265,14 +267,14 @@ def _locked_review_transition(
     if terminal_path is not None:
         return _failed("E_DUP", f"terminal entry already exists: {terminal_path}", "entry_id")
 
-    check_evidence_exists = decision == "approve"
+    validation_mode: ValidationMode = "full" if decision == "approve" else "state_only"
     loaded = _load_entry_for_state(
         kb_root=kb_root,
         repo_root=repo_root,
         source_dir="staging",
         entry_id=entry_id,
         expected_state=TrustState.PENDING,
-        check_evidence_exists=check_evidence_exists,
+        validation_mode=validation_mode,
     )
     if loaded is None:
         return _failed("E_SCHEMA", "staging entry not found or invalid", "entry_id")
@@ -286,20 +288,20 @@ def _locked_review_transition(
             "updated": datetime.now(UTC).isoformat(),
         }
     )
-    target_report = validate_entry(
-        reviewed,
-        repo_root=repo_root,
-        kb_root=kb_root,
-        entry_path=target_path,
-        check_evidence_exists=check_evidence_exists,
-    )
-    if not target_report.ok:
-        return _failed(
-            target_report.errors[0].code.value,
-            "entry validation failed before review persist",
-            target_report.errors[0].field,
+    if decision == "approve":
+        target_report = validate_entry(
+            reviewed,
+            repo_root=repo_root,
+            kb_root=kb_root,
+            entry_path=target_path,
         )
-    reviewed = target_report.entry
+        if not target_report.ok:
+            return _failed(
+                target_report.errors[0].code.value,
+                "entry validation failed before review persist",
+                target_report.errors[0].field,
+            )
+        reviewed = target_report.entry
 
     try:
         write_entry(target_path, reviewed)
@@ -312,7 +314,7 @@ def _locked_review_transition(
         source_dir=target_dir,
         entry_id=entry_id,
         expected_state=target_state,
-        check_evidence_exists=check_evidence_exists,
+        validation_mode=validation_mode,
     )
     if post_write is None:
         _rollback_target(target_path)
@@ -347,7 +349,7 @@ def _locked_review_transition(
         warning = ApiError(
             "E_SCHEMA",
             f"review source cleanup failed: {exc}",
-            "source_path",
+            "staging_residue",
         )
         return ReviewOperationResult(
             ok=True,
@@ -378,7 +380,7 @@ def _load_entry_for_state(
     source_dir: Literal["staging", "entries", "deprecated"],
     entry_id: str,
     expected_state: TrustState,
-    check_evidence_exists: bool = True,
+    validation_mode: ValidationMode = "full",
 ) -> tuple[Entry, Path] | None:
     try:
         path = _existing_entry_path(kb_root, source_dir, entry_id)
@@ -404,12 +406,14 @@ def _load_entry_for_state(
             entry.trust_state,
         )
         return None
+    if validation_mode == "state_only":
+        return entry, path
     report = validate_entry(
         entry,
         repo_root=repo_root,
         kb_root=kb_root,
         entry_path=path,
-        check_evidence_exists=check_evidence_exists,
+        check_evidence_exists=validation_mode == "full",
     )
     if not report.ok:
         issues = "; ".join(
