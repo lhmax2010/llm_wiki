@@ -2,6 +2,8 @@
 
 请对 Phase 4 PR 做代码审查。风险档：普通风险，两路 review（Claude + ChatGPT）。
 
+PR 链接：https://github.com/lhmax2010/llm_wiki/pull/4
+
 ## 背景
 
 本项目是内网统一知识库。Phase 1 已完成内容核/schema/storage/validation；Phase 2 已完成 Governed API pipeline 并修复 role/diff/id/audit 信任边界；Phase 3 已完成 MCP wrapper，并修复 path traversal 读 research 与 `propose_update` 绕发号问题。

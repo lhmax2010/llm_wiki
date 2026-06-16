@@ -2,7 +2,7 @@
 
 ## 最终状态
 
-待 Review。Phase 4 索引 + 检索 V1 已完成编码与本地门禁；PR 待创建后进入两路 review（Claude + ChatGPT）。
+待 Review。Phase 4 索引 + 检索 V1 已完成编码与本地门禁；PR #4 已创建，进入两路 review（Claude + ChatGPT）。
 
 ## 测试情况
 
@@ -28,8 +28,9 @@
 
 ## PR 与代码
 
-- PR 链接：待创建
-- 对应 Git Commit：待提交
+- PR 链接：https://github.com/lhmax2010/llm_wiki/pull/4
+- 对应 Git Commit：
+  - `b20061a` - `[Phase 4] index search layer`
 
 ## Review 状态
 
