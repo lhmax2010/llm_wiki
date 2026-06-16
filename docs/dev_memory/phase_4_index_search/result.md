@@ -2,7 +2,7 @@
 
 ## 最终状态
 
-待 Review。Phase 4 索引 + 检索 V1 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-7），当前 PR #4 等待复核。
+待 Merge。Phase 4 索引 + 检索 V1 已完成三路 review 后的 R14 修复（FIX-1 到 FIX-7），两个 BLOCKER 修法已复核通过，当前 PR #4 等待 merge。
 
 ## 测试情况
 
