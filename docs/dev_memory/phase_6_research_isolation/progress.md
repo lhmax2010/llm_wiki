@@ -114,6 +114,7 @@
 
 ## TODO / 后续
 
+- FIX-1 还有一个 NIT：`_research_reference()` 当前没有先做 URL decode，理论上 `research%3AR-2026-0001` 这类刻意 URL 编码的 research URI 仍可能绕过。概率极低且需要故意洗证据，后续可用 `urllib.parse.unquote()` 归一后再检测。
 - promote 可抽公共 helper：当前纪律已到位（preflight audit、validate、write、post-validate、audit、rollback），但没有和 P5 共用 helper；后续可抽一个 review/publish/promote 共用的状态写入 helper。
 - research promote lock 与 P5 review lock 类似：进程硬崩时可能残留 `.lock`，需手动清理；后续可加锁超时/PID 检查。
 - research index 当前是全量 rebuild + query-time Python 过滤；性能优化留后续健康/规模化阶段。
