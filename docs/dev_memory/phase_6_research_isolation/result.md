@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 Merge。Phase 6 已完成 R14 修复闭环并更新 PR #7；FIX-1/FIX-2 已确认是真修，其余 R14 修复已随 PR 一并准备合并。
+已 Merge。Phase 6 已通过 PR #7 合并到 `main`；checkpoint tag：`checkpoint/phase_6_research_isolation`。R14 的 1 个 BLOCKER、4 个 MAJOR、4 个 MINOR 已闭环，FIX-1/FIX-2 已确认是真修。
 
 ## 测试情况
 
@@ -20,15 +20,17 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/7
 - 对应 Git Commit：
+  - `f31e3ef` - `Merge pull request #7 from lhmax2010/phase/6-research-isolation`
+  - `84337f4` - `[Phase 6] docs: dev_memory 收尾 + URL编码 NIT TODO`
   - `d17e3b0` - `[Phase 6] research isolation`
   - `ffa8d7a` - `[Phase 6] docs: add PR link`
-  - current PR head - `[Phase 6] fix: R14 research isolation closure`
+  - `f216888` - `[Phase 6] fix: R14 research isolation closure`
 
 ## Review 状态
 
 - 三路 review 已完成，发现 1 BLOCKER + 4 MAJOR + 4 MINOR。
 - FIX-1 到 FIX-9 已修复并补测试。
-- 等待三路 review 复核修复。
+- FIX-1/FIX-2 已确认是真修；其余修复随 PR 合并。
 
 ## 遗留问题 / 风险
 
@@ -38,6 +40,4 @@
 
 ## 下一步
 
-- 推送 R14 修复 commit 到 PR #7。
-- 三路 review 复核。
-- 复核通过后按高风险 Phase 收尾合并并打 checkpoint。
+- Phase 7：Web human reader/editor。
