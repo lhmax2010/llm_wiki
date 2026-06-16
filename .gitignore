@@ -9,3 +9,5 @@ poetry.lock.bak
 .DS_Store
 kb/indexes/*.db
 kb/indexes/*.sqlite
+kb/indexes/**/*.db
+kb/indexes/**/*.sqlite
