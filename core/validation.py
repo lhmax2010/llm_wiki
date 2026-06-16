@@ -21,6 +21,7 @@ from core.models import (
 
 ID_PATTERN = re.compile(r"^KB-(?P<year>\d{4})-(?P<number>\d{4})$")
 RESEARCH_ID_PATTERN = re.compile(r"^R-\d{4}-\d{4}$")
+RESEARCH_ID_ANY_PATTERN = re.compile(r"\bR-\d{4}-\d{4}\b", re.IGNORECASE)
 HEX_64_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 HEX_16_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 RELATIVE_POSIX_PATH_PATTERN = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$)).+[^/]$")
@@ -455,10 +456,13 @@ def _research_reference(evidence: Evidence) -> str | None:
     ):
         if value is None:
             continue
-        normalized = value.replace("\\", "/")
-        if RESEARCH_ID_PATTERN.fullmatch(normalized):
+        normalized = value.strip().replace("\\", "/")
+        lowered = normalized.lower()
+        if RESEARCH_ID_ANY_PATTERN.search(normalized):
             return value
-        if normalized.startswith(("research/", "kb/research/")) or "/research/" in normalized:
+        if lowered.startswith(("research:", "research://", "research/", "kb/research/")):
+            return value
+        if "/research/" in lowered:
             return value
     return None
 

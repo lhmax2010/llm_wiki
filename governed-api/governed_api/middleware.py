@@ -143,6 +143,7 @@ def auth_context(roles_config: RolesConfig) -> Middleware:
                 ),
             )
 
+        author_type = auth.get("author_type")
         if (
             context["operation"]
             in {
@@ -150,13 +151,13 @@ def auth_context(roles_config: RolesConfig) -> Middleware:
                 "update_research",
                 "promote_research_to_draft",
             }
-            and auth.get("author_type") == "agent"
+            and author_type != "human"
         ):
             return fail(
                 context,
                 ApiError(
                     "E_PERM",
-                    "agent cannot create/update/promote research",
+                    "research write operations require system author_type=human",
                     "auth.author_type",
                 ),
             )
@@ -166,7 +167,6 @@ def auth_context(roles_config: RolesConfig) -> Middleware:
             "role": resolved_role,
             "permissions": permissions,
         }
-        author_type = auth.get("author_type")
         if isinstance(author_type, str):
             next_auth["author_type"] = author_type
         next_context: MiddlewareContext = context.copy()

@@ -4,6 +4,8 @@ import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from core.errors import IssueCode, ValidationIssue
 from core.models import Entry, EntryType
 from core.validation import headings_for_entry_type, trust_state_for_path, validate_entry
@@ -528,6 +530,31 @@ def test_research_reference_cannot_be_formal_entry_evidence(
         claim_type="historical_pattern",
         evidence=[{"type": "historical_entry", "ref": "R-2026-0001"}],
     )
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    assert _has_issue(
+        report.errors,
+        IssueCode.E_RESEARCH_AS_EVIDENCE,
+        "credibility.evidence[0]",
+    )
+
+
+@pytest.mark.parametrize(
+    ("evidence", "claim_type"),
+    [
+        ({"type": "spec", "uri": "research:R-2026-0001", "version": "v1"}, "spec"),
+        ({"type": "spec", "uri": "research://R-2026-0001", "version": "v1"}, "spec"),
+        ({"type": "ticket", "ref": "RESEARCH://R-2026-0001"}, "observation"),
+        ({"type": "human_note", "excerpt": "see temporary clue R-2026-0001"}, "observation"),
+    ],
+)
+def test_research_reference_detection_covers_uri_schemes_and_substrings(
+    make_entry: Callable[..., Entry],
+    evidence: dict[str, object],
+    claim_type: str,
+) -> None:
+    entry = make_entry(claim_type=claim_type, evidence=[evidence])
 
     report = validate_entry(entry, check_evidence_exists=False)
 

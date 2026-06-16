@@ -34,7 +34,3 @@ class ResearchSignal(TypedDict, total=False):
     snippet: Required[str]
     trust_state: Required[str]
     warning: Required[str]
-    tags: list[str]
-    created: str
-    expires_at: str | None
-    score: int

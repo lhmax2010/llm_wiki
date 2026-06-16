@@ -11,7 +11,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import yaml  # type: ignore[import-untyped]
 from governed_api.audit import append_audit_record, preflight_audit_path
@@ -19,12 +19,15 @@ from governed_api.roles import ADMIN_PERMISSION, RolesConfig
 from governed_api.types import ApiError, AuditRecord
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from core.id_allocator import IDAllocator
+from core.id_allocator import MAX_ID_NUMBER, MAX_YEAR, MIN_YEAR, IDAllocator
 from core.models import AuthorType, Entry, TrustState
 from core.storage import FRONTMATTER_MARKER, read_frontmatter, write_entry
 from core.validation import ID_PATTERN, validate_entry
 
 LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from index.sqlite_index import IndexedEntry
 
 RESEARCH_ID_PATTERN = re.compile(r"^R-(?P<year>\d{4})-(?P<number>\d{4})$")
 DEFAULT_TTL_DAYS = 60
@@ -33,7 +36,10 @@ UPDATE_RESEARCH_PERMISSION = "edit_own_research"
 PROMOTE_RESEARCH_PERMISSION = "promote_research_to_draft"
 RESEARCH_DIR: Literal["research"] = "research"
 DRAFTS_DIR: Literal["drafts"] = "drafts"
+STAGING_DIR = "staging"
+ENTRIES_DIR = "entries"
 INDEXES_DIR: Literal["indexes"] = "indexes"
+PROMOTED_SOURCE_DIRS = (DRAFTS_DIR, STAGING_DIR, ENTRIES_DIR)
 
 
 class ResearchRecord(BaseModel):
@@ -87,11 +93,17 @@ class ResearchIdAllocator:
 
     def allocate(self, *, year: int | None = None) -> str:
         target_year = year or datetime.now().year
+        _validate_research_year(target_year)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.db_path, timeout=30)) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute(
-                "CREATE TABLE IF NOT EXISTS ids(year INTEGER PRIMARY KEY, next INTEGER NOT NULL)"
+                """
+                CREATE TABLE IF NOT EXISTS ids(
+                    year INTEGER PRIMARY KEY,
+                    next INTEGER NOT NULL CHECK(next > 0)
+                )
+                """
             )
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
@@ -106,6 +118,7 @@ class ResearchIdAllocator:
                 )
             else:
                 next_number = int(row[0])
+                _validate_research_number_available(next_number, target_year)
                 connection.execute(
                     "UPDATE ids SET next = ? WHERE year = ?",
                     (next_number + 1, target_year),
@@ -120,7 +133,7 @@ class ResearchStore:
     repo_root: Path
     roles_config: RolesConfig
     user: str
-    author_type: AuthorType = AuthorType.HUMAN
+    author_type: AuthorType | None = None
     audit_path: Path | None = None
     research_id_allocator: ResearchIdAllocator | None = None
     entry_id_allocator: IDAllocator | None = None
@@ -202,6 +215,9 @@ class ResearchStore:
         if loaded is None:
             return _failed(ApiError("E_SCHEMA", f"research not found: {research_id}", "id"))
         record, path = loaded
+        ownership_error = self._ownership_error(record)
+        if ownership_error is not None:
+            return _failed(ownership_error)
         updated = record.model_copy(
             update={
                 "title": title if title is not None else record.title,
@@ -226,6 +242,14 @@ class ResearchStore:
             )
             append_audit_record(audit_path, audit_record)
         except OSError as exc:
+            try:
+                write_research_record(path, record)
+            except OSError as rollback_exc:
+                LOGGER.error(
+                    "research update rollback failed: %s (%s) - unaudited update may remain",
+                    path,
+                    rollback_exc,
+                )
             return _failed(ApiError("E_SCHEMA", f"research update failed: {exc}", "research"))
         return ResearchOperationResult(
             ok=True,
@@ -393,9 +417,11 @@ class ResearchStore:
         )
 
     def _permission_error(self, permission: str) -> ApiError | None:
-        if self.author_type == AuthorType.AGENT:
+        if self.author_type != AuthorType.HUMAN:
             return ApiError(
-                "E_PERM", "agent cannot create/update/promote research", "auth.author_type"
+                "E_PERM",
+                "research write operations require system author_type=human",
+                "auth.author_type",
             )
         try:
             _role, permissions = self.roles_config.permissions_for_user(self.user)
@@ -404,6 +430,17 @@ class ResearchStore:
         if ADMIN_PERMISSION not in permissions and permission not in permissions:
             return ApiError("E_PERM", f"permission required: {permission}", "auth.permissions")
         return None
+
+    def _ownership_error(self, record: ResearchRecord) -> ApiError | None:
+        try:
+            _role, permissions = self.roles_config.permissions_for_user(self.user)
+        except KeyError:
+            return ApiError("E_PERM", f"unknown user: {self.user}", "auth.user")
+        if ADMIN_PERMISSION in permissions:
+            return None
+        if record.author == self.user:
+            return None
+        return ApiError("E_PERM", "edit_own_research requires record ownership", "research.author")
 
     def _role(self) -> str:
         return self.roles_config.permissions_for_user(self.user)[0]
@@ -557,23 +594,35 @@ def _source_root(kb_root: Path, source_dir: Literal["research", "drafts", "index
 
 
 def _draft_exists_for_research(kb_root: Path, research_id: str) -> bool:
-    try:
-        from index.sqlite_index import read_valid_entries_from_source
-    except ImportError:
-        return False
-    try:
-        entries, _ = read_valid_entries_from_source(
-            kb_root, DRAFTS_DIR, context="research promote duplicate scan"
-        )
-    except ValueError:
-        return False
-    return any(
-        any(
-            ref.get("type") == "research" and ref.get("id") == research_id
-            for ref in entry.source_refs
-        )
-        for entry in (item.entry for item in entries)
-    )
+    for source_dir in PROMOTED_SOURCE_DIRS:
+        try:
+            entries, _ = _read_valid_entries_from_source(
+                kb_root, source_dir, context="research promote duplicate scan"
+            )
+        except (OSError, ValueError) as exc:
+            LOGGER.error(
+                "research promote duplicate scan failed closed for %s (%s)",
+                source_dir,
+                exc,
+            )
+            return True
+        if any(
+            any(
+                ref.get("type") == "research" and ref.get("id") == research_id
+                for ref in entry.source_refs
+            )
+            for entry in (item.entry for item in entries)
+        ):
+            return True
+    return False
+
+
+def _read_valid_entries_from_source(
+    kb_root: Path, source_dir: str, *, context: str
+) -> tuple[list[IndexedEntry], int]:
+    from index.sqlite_index import read_valid_entries_from_source
+
+    return read_valid_entries_from_source(kb_root, source_dir, context=context)
 
 
 def _acquire_research_lock(kb_root: Path, research_id: str) -> Path:
@@ -656,6 +705,16 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _validate_research_year(year: int) -> None:
+    if year < MIN_YEAR or year > MAX_YEAR:
+        raise ValueError(f"year must be a four-digit year: {year}")
+
+
+def _validate_research_number_available(number: int, year: int) -> None:
+    if number > MAX_ID_NUMBER:
+        raise ValueError(f"research ID sequence exhausted for {year}")
 
 
 def _failed(error: ApiError) -> ResearchOperationResult:

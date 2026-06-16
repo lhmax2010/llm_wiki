@@ -470,13 +470,18 @@ def _search_research_records(
     synonym_groups = load_synonym_groups(kb_root / "synonyms.jsonl")
     terms = expand_query_terms(query, synonym_groups, enabled=expand_synonyms)
     signals = [
-        _research_signal_for(record, terms=terms, original_query=query)
+        (
+            _research_score(record, terms),
+            record.created,
+            record.id,
+            _research_signal_for(record, terms=terms, original_query=query),
+        )
         for record in records
         if _research_matches_query(record, terms)
     ]
-    signals.sort(key=lambda item: (item.get("score", 0), item["created"], item["id"]), reverse=True)
+    signals.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
     start = max(offset, 0)
-    return signals[start : start + max(limit, 0)]
+    return [signal for *_sort_keys, signal in signals[start : start + max(limit, 0)]]
 
 
 def _research_matches_query(record: ResearchRecord, terms: list[str]) -> bool:
@@ -504,10 +509,6 @@ def _research_signal_for(
             "snippet": _research_snippet(record, terms, original_query),
             "trust_state": "research",
             "warning": "unverified_research，不可用于判责",
-            "tags": record.tags,
-            "created": record.created,
-            "expires_at": record.expires_at,
-            "score": _research_score(record, terms),
         }
     )
 

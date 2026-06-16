@@ -83,6 +83,7 @@ def test_research_index_is_real_and_still_separate_from_agent_index(tmp_path: Pa
     assert result.indexed_entries == 1
     signals = service.search_research("raw research body")
     assert [signal["id"] for signal in signals] == ["R-2026-0001"]
+    assert set(signals[0]) == {"id", "title", "snippet", "trust_state", "warning"}
     assert signals[0]["trust_state"] == "research"
     assert signals[0]["warning"] == "unverified_research，不可用于判责"
     assert "raw research body" in signals[0]["snippet"]
