@@ -4,7 +4,7 @@
 
 ## Current
 
-- Active phase: none
+- Active phase: `phase_10a_skill_contracts`（低风险，一路 Claude review）
 - Last merged phase: `phase_5_staging_review`
 
 ## Phases
@@ -16,5 +16,6 @@
 | phase_3 | mcp-server | 已 Merge | `docs/dev_memory/phase_3_mcp_server/` | https://github.com/lhmax2010/llm_wiki/pull/3 | e8c5ce9 (merge), 176ebd4 (PR head) |
 | phase_4 | index-search | 已 Merge | `docs/dev_memory/phase_4_index_search/` | https://github.com/lhmax2010/llm_wiki/pull/4 | 8c33dbd (merge), 053a5b5 (PR head) |
 | phase_5 | staging-review | 已 Merge | `docs/dev_memory/phase_5_staging_review/` | https://github.com/lhmax2010/llm_wiki/pull/5 | 7a26423 (merge), c8ea6a9 (PR head) |
+| phase_10a | skill-contracts | 待 Review | `docs/dev_memory/phase_10a_skill_contracts/` | 待创建 | 77f5715 (baseline) |
 
 Status vocabulary: 进行中 / 待 Review / 已 Merge / 已 Skip.
