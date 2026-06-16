@@ -30,6 +30,7 @@
 
 - PR 链接：https://github.com/lhmax2010/llm_wiki/pull/4
 - 对应 Git Commit：
+  - `5b6542a` - `[Phase 4] docs: add PR link`
   - `b20061a` - `[Phase 4] index search layer`
 
 ## Review 状态
