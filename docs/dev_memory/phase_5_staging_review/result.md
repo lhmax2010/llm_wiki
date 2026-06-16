@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 review。Phase 5 已完成 staging queue、approve、reject 的核心 service 与单测；尚未创建/合并 PR。
+待 review。Phase 5 已完成 staging queue、approve、reject 的核心 service 与单测；PR #5 已创建，等待三路 review。
 
 ## 测试情况
 
@@ -24,8 +24,9 @@
 
 ## PR 与代码
 
-- PR 链接：待创建
-- 对应 Git Commit：待提交
+- PR 链接：https://github.com/lhmax2010/llm_wiki/pull/5
+- 对应 Git Commit：
+  - `47513ca` - `[Phase 5] staging review lifecycle`
 
 ## Review 状态
 
