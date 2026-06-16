@@ -11,7 +11,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from governed_api import (
     ApiError,
@@ -27,12 +27,11 @@ from governed_api import (
     schema_validate,
 )
 from governed_api.types import Middleware
-from pydantic import ValidationError
 
 from core.id_allocator import IDAllocator
 from core.models import Entry
-from core.storage import read_entry
 from index import IndexUnavailable, SearchService
+from index.sqlite_index import read_valid_entries_from_source, read_valid_entry_file
 from mcp.kb_server.types import ProposeResult, SearchResult, SearchScope
 
 LOGGER = logging.getLogger(__name__)
@@ -40,7 +39,6 @@ KB_ID_RE = re.compile(r"^KB-\d{4}-\d{4}$")
 
 PUBLISHED_DIR = "entries"
 PENDING_DIR = "staging"
-SUPPORT_RANK = {"weak": 0, "moderate": 1, "strong": 2}
 
 
 class ToolError(Exception):
@@ -93,14 +91,15 @@ class MCPHandlers:
             )
         except IndexUnavailable as exc:
             LOGGER.warning("search index unavailable, falling back to directory scan: %s", exc)
-        scope = scope or {}
-        matched_results: list[tuple[Entry, SearchResult]] = []
-        for entry in self._scan_entries(include_pending=include_pending):
-            result = _search_result_for(entry, query=query, scope=scope)
-            if result is not None:
-                matched_results.append((entry, result))
-        sorted_results = _sort_results(matched_results, sort)
-        return sorted_results[max(offset, 0) : max(offset, 0) + max(limit, 0)]
+        return service.search_agent_direct(
+            query,
+            scope=scope,
+            include_pending=include_pending,
+            expand_synonyms=expand_synonyms,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+        )
 
     def get_entry(self, id: str, include_pending: bool = False) -> dict[str, Any]:
         self._require("read_published")
@@ -228,7 +227,14 @@ class MCPHandlers:
             dirs.append(PENDING_DIR)
         entries: list[Entry] = []
         for dirname in dirs:
-            entries.extend(_read_entries_from_dir(self.kb_root / dirname))
+            try:
+                indexed, _ = read_valid_entries_from_source(
+                    self.kb_root, dirname, context=f"MCP {dirname} scan"
+                )
+            except ValueError as exc:
+                LOGGER.warning("skipping invalid MCP scan directory: %s (%s)", dirname, exc)
+                continue
+            entries.extend(item.entry for item in indexed)
         return entries
 
     def _find_entry(self, entry_id: str, *, dirs: Iterable[str]) -> Entry | None:
@@ -236,10 +242,14 @@ class MCPHandlers:
             path = _entry_path(self.kb_root, dirname, entry_id)
             if path.is_file():
                 try:
-                    return read_entry(path)
-                except (OSError, ValidationError, ValueError) as exc:
-                    LOGGER.warning("skipping unreadable entry file: %s (%s)", path, exc)
-                    raise ToolError("E_SCHEMA", f"entry is unreadable: {entry_id}", "id") from exc
+                    item = read_valid_entry_file(
+                        self.kb_root, dirname, path, context=f"MCP {dirname} entry read"
+                    )
+                except ValueError as exc:
+                    raise ToolError("E_SCHEMA", f"invalid entry source: {dirname}", "dir") from exc
+                if item is None:
+                    raise ToolError("E_SCHEMA", f"entry is unreadable or invalid: {entry_id}", "id")
+                return item.entry
         return None
 
     def _require(self, permission: str) -> None:
@@ -254,20 +264,6 @@ class MCPHandlers:
         # Touch role to make it obvious this check is user-mapping based, not caller-declared.
         if not role:
             raise ToolError("E_PERM", f"unknown role for user: {self.user}", "auth.role")
-
-
-def _read_entries_from_dir(directory: Path) -> list[Entry]:
-    if not directory.exists():
-        return []
-    entries: list[Entry] = []
-    for path in sorted(directory.glob("*.md")):
-        if not path.is_file():
-            continue
-        try:
-            entries.append(read_entry(path))
-        except (OSError, ValidationError, ValueError) as exc:
-            LOGGER.warning("skipping unreadable entry file: %s (%s)", path, exc)
-    return entries
 
 
 def _read_dirs(*, include_pending: bool) -> tuple[str, ...]:
@@ -289,137 +285,6 @@ def _entry_path(kb_root: Path, dirname: str, entry_id: str) -> Path:
     if not path.is_relative_to(base):
         raise ToolError("E_SCHEMA", "entry path escaped MCP-readable directory", "id")
     return path
-
-
-def _search_result_for(entry: Entry, *, query: str, scope: SearchScope) -> SearchResult | None:
-    matched_section_raw = _scope_matched_section(entry, scope)
-    if matched_section_raw is _NO_MATCH:
-        return None
-    matched_section = cast(str | None, matched_section_raw)
-    if not _matches_query(entry, query):
-        return None
-    snippet = _snippet(entry, query)
-    score = _score(entry, query)
-    stale = bool(entry.code_binding.stale) if entry.code_binding is not None else False
-    return SearchResult(
-        {
-            "id": entry.id,
-            "title": entry.title,
-            "entry_type": entry.entry_type.value,
-            "module": entry.module,
-            "snippet": snippet,
-            "matched_section": matched_section,
-            "credibility": entry.credibility.model_dump(mode="json"),
-            "trust_state": entry.trust_state.value,
-            "stale": stale,
-            "score": score,
-        }
-    )
-
-
-_NO_MATCH = object()
-
-
-def _scope_matched_section(entry: Entry, scope: SearchScope) -> str | None | object:
-    if scope.get("module") not in (None, entry.module):
-        return _NO_MATCH
-    if scope.get("entry_type") not in (None, entry.entry_type.value):
-        return _NO_MATCH
-    if scope.get("error_code") is not None and scope["error_code"] not in entry.error_codes:
-        return _NO_MATCH
-    if scope.get("claim_type") not in (None, entry.credibility.claim_type.value):
-        return _NO_MATCH
-    if scope.get("status") not in (None, entry.trust_state.value):
-        return _NO_MATCH
-    if scope.get("exclude_stale") and entry.code_binding is not None and entry.code_binding.stale:
-        return _NO_MATCH
-    min_support = scope.get("min_support")
-    if min_support is None:
-        return None
-    return _support_match(entry, min_support)
-
-
-def _support_match(entry: Entry, min_support: str) -> str | None | object:
-    minimum = SUPPORT_RANK.get(min_support)
-    if minimum is None:
-        return _NO_MATCH
-    if SUPPORT_RANK[entry.credibility.support_strength.value] >= minimum:
-        return None
-    for section, credibility in entry.section_credibility.items():
-        support = credibility.support_strength
-        if support is not None and SUPPORT_RANK[support.value] >= minimum:
-            return section
-    return _NO_MATCH
-
-
-def _matches_query(entry: Entry, query: str) -> bool:
-    normalized = query.strip().lower()
-    if not normalized:
-        return True
-    return normalized in _entry_search_text(entry)
-
-
-def _entry_search_text(entry: Entry) -> str:
-    parts = [
-        entry.id,
-        entry.title,
-        entry.module,
-        entry.body,
-        *entry.tags,
-        *entry.aliases,
-        *entry.symptom_keywords,
-        *entry.error_codes,
-        *entry.log_signatures,
-    ]
-    return "\n".join(parts).lower()
-
-
-def _snippet(entry: Entry, query: str) -> str:
-    normalized = query.strip().lower()
-    lines = [entry.title, *entry.body.splitlines()]
-    if normalized:
-        for line in lines:
-            if normalized in line.lower():
-                return line.strip()[:240]
-    return entry.title[:240]
-
-
-def _score(entry: Entry, query: str) -> int:
-    normalized = query.strip().lower()
-    if not normalized:
-        return 0
-    score = 0
-    if normalized in entry.title.lower():
-        score += 10
-    if normalized in entry.module.lower():
-        score += 4
-    if normalized in entry.body.lower():
-        score += 2
-    if any(normalized in value.lower() for value in entry.tags + entry.aliases):
-        score += 3
-    if any(normalized in value.lower() for value in entry.error_codes):
-        score += 5
-    return score
-
-
-def _sort_results(results: list[tuple[Entry, SearchResult]], sort: str) -> list[SearchResult]:
-    if sort == "updated_desc":
-        return [
-            result
-            for _, result in sorted(
-                results, key=lambda item: (item[0].updated, item[0].id), reverse=True
-            )
-        ]
-    if sort == "title":
-        return [result for _, result in sorted(results, key=lambda item: item[1]["title"])]
-    return [
-        result
-        for _, result in sorted(
-            results,
-            key=lambda item: (item[1].get("score", 0), item[0].updated, item[0].id),
-            reverse=True,
-        )
-    ]
 
 
 def _entry_summary(entry: Entry) -> dict[str, Any]:

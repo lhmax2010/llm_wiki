@@ -1,9 +1,17 @@
-"""SQLite metadata index for Phase 4 search."""
+"""SQLite path catalog for Phase 4 search.
+
+P4 uses SQLite to persist a rebuildable list of validated entry paths per search
+index. Query-time filtering intentionally stays in Python so synonyms, CJK
+bigram matching, and section support passthrough share one correctness path.
+SQL-level acceleration is a future optimization once the search surface grows
+beyond the V1 thousand-entry budget.
+"""
 
 from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +20,7 @@ from pydantic import ValidationError
 
 from core.models import Entry
 from core.storage import read_entry
+from core.validation import validate_entry
 
 LOGGER = logging.getLogger(__name__)
 RESEARCH_DIR = "research"
@@ -38,7 +47,7 @@ class IndexedEntry:
 
 @dataclass(frozen=True, slots=True)
 class SQLiteMetadataIndex:
-    """Rebuildable SQLite metadata index backed by markdown Entry files."""
+    """Rebuildable SQLite path index backed by validated markdown Entry files."""
 
     name: str
     db_path: Path
@@ -54,23 +63,13 @@ class SQLiteMetadataIndex:
         entries: list[IndexedEntry] = []
         skipped = 0
         for source_dir in self.source_dirs:
-            directory = _safe_source_dir(kb_root, source_dir)
-            if not directory.exists():
-                continue
-            for path in sorted(directory.glob("*.md")):
-                if not path.is_file():
-                    continue
-                try:
-                    entry = read_entry(path)
-                except (OSError, ValidationError, ValueError) as exc:
-                    skipped += 1
-                    LOGGER.warning(
-                        "skipping unreadable entry file while indexing: %s (%s)", path, exc
-                    )
-                    continue
-                entries.append(IndexedEntry(entry=entry, path=path, source_dir=source_dir))
+            source_entries, source_skipped = read_valid_entries_from_source(
+                kb_root, source_dir, context=f"{self.name} rebuild"
+            )
+            entries.extend(source_entries)
+            skipped += source_skipped
 
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             _create_schema(connection)
             connection.execute("DELETE FROM index_meta")
             connection.execute("DELETE FROM entries")
@@ -81,13 +80,13 @@ class SQLiteMetadataIndex:
             connection.executemany(
                 """
                 INSERT INTO entries(
-                    id, path, source_dir, title, module, entry_type, trust_state,
-                    claim_type, support_strength, stale, updated
+                    id, path, source_dir
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?)
                 """,
                 [_row_for_entry(item, kb_root) for item in entries],
             )
+            connection.commit()
 
         return IndexBuildResult(
             index_name=self.name,
@@ -100,7 +99,7 @@ class SQLiteMetadataIndex:
         if not self.db_path.is_file():
             raise IndexUnavailable(f"index is not built: {self.name}")
         try:
-            with sqlite3.connect(self.db_path) as connection:
+            with closing(sqlite3.connect(self.db_path)) as connection:
                 connection.row_factory = sqlite3.Row
                 rows = connection.execute(
                     "SELECT path, source_dir FROM entries ORDER BY id"
@@ -112,27 +111,30 @@ class SQLiteMetadataIndex:
         for row in rows:
             path = (kb_root / str(row["path"])).resolve()
             source_dir = str(row["source_dir"])
-            source_root = _safe_source_dir(kb_root, source_dir).resolve()
-            if not path.is_relative_to(source_root):
-                LOGGER.warning("skipping indexed path outside source dir: %s", path)
-                continue
             try:
-                entries.append(
-                    IndexedEntry(entry=read_entry(path), path=path, source_dir=source_dir)
+                item = read_valid_entry_file(
+                    kb_root,
+                    source_dir,
+                    path,
+                    context=f"{self.name} indexed read",
                 )
-            except (OSError, ValidationError, ValueError) as exc:
-                LOGGER.warning("skipping unreadable indexed entry file: %s (%s)", path, exc)
+            except ValueError as exc:
+                raise IndexUnavailable(f"index has invalid source_dir: {source_dir}") from exc
+            if item is not None:
+                entries.append(item)
         return entries
 
     def indexed_paths(self) -> list[str]:
         if not self.db_path.is_file():
             return []
-        with sqlite3.connect(self.db_path) as connection:
+        with closing(sqlite3.connect(self.db_path)) as connection:
             rows = connection.execute("SELECT path FROM entries ORDER BY path").fetchall()
         return [str(row[0]) for row in rows]
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP TABLE IF EXISTS index_meta")
+    connection.execute("DROP TABLE IF EXISTS entries")
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS index_meta(
@@ -147,43 +149,76 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS entries(
             id TEXT PRIMARY KEY,
             path TEXT NOT NULL,
-            source_dir TEXT NOT NULL,
-            title TEXT NOT NULL,
-            module TEXT NOT NULL,
-            entry_type TEXT NOT NULL,
-            trust_state TEXT NOT NULL,
-            claim_type TEXT NOT NULL,
-            support_strength TEXT NOT NULL,
-            stale INTEGER NOT NULL,
-            updated TEXT NOT NULL
+            source_dir TEXT NOT NULL
         )
         """
     )
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_module ON entries(module)")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_entry_type ON entries(entry_type)")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_claim_type ON entries(claim_type)")
-    connection.execute("CREATE INDEX IF NOT EXISTS idx_entries_trust_state ON entries(trust_state)")
 
 
-def _row_for_entry(
-    item: IndexedEntry, kb_root: Path
-) -> tuple[str, str, str, str, str, str, str, str, str, int, str]:
+def _row_for_entry(item: IndexedEntry, kb_root: Path) -> tuple[str, str, str]:
     entry = item.entry
-    stale = bool(entry.code_binding.stale) if entry.code_binding is not None else False
     relative_path = item.path.resolve().relative_to(kb_root.resolve()).as_posix()
-    return (
-        entry.id,
-        relative_path,
-        item.source_dir,
-        entry.title,
-        entry.module,
-        entry.entry_type.value,
-        entry.trust_state.value,
-        entry.credibility.claim_type.value,
-        entry.credibility.support_strength.value,
-        1 if stale else 0,
-        entry.updated,
+    return (entry.id, relative_path, item.source_dir)
+
+
+def read_valid_entries_from_source(
+    kb_root: Path,
+    source_dir: str,
+    *,
+    context: str,
+) -> tuple[list[IndexedEntry], int]:
+    directory = _safe_source_dir(kb_root, source_dir)
+    if not directory.exists():
+        return [], 0
+    entries: list[IndexedEntry] = []
+    skipped = 0
+    for path in sorted(directory.glob("*.md")):
+        if not path.is_file():
+            continue
+        item = read_valid_entry_file(kb_root, source_dir, path, context=context)
+        if item is None:
+            skipped += 1
+            continue
+        entries.append(item)
+    return entries, skipped
+
+
+def read_valid_entry_file(
+    kb_root: Path,
+    source_dir: str,
+    path: Path,
+    *,
+    context: str,
+) -> IndexedEntry | None:
+    source_root = _safe_source_dir(kb_root, source_dir).resolve()
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        LOGGER.warning("%s: skipping unresolvable entry path: %s (%s)", context, path, exc)
+        return None
+    if not resolved.is_file():
+        return None
+    if not resolved.is_relative_to(source_root):
+        LOGGER.warning("%s: skipping entry path outside source dir: %s", context, resolved)
+        return None
+    try:
+        entry = read_entry(resolved)
+    except (OSError, ValidationError, ValueError) as exc:
+        LOGGER.warning("%s: skipping unreadable entry file: %s (%s)", context, resolved, exc)
+        return None
+    report = validate_entry(
+        entry,
+        kb_root=kb_root,
+        entry_path=resolved,
+        check_evidence_exists=False,
     )
+    if not report.ok:
+        issues = "; ".join(
+            f"{issue.code.value}:{issue.field}:{issue.message}" for issue in report.errors
+        )
+        LOGGER.warning("%s: skipping invalid entry file: %s (%s)", context, resolved, issues)
+        return None
+    return IndexedEntry(entry=report.entry, path=resolved, source_dir=source_dir)
 
 
 def _safe_source_dir(kb_root: Path, source_dir: str) -> Path:

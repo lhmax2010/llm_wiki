@@ -1,19 +1,25 @@
-"""Search service built on the Phase 4 metadata indexes."""
+"""Search service built on Phase 4 validated path indexes.
+
+The current search path optimizes for correctness and isolation: rebuild stores
+only validated, source-whitelisted paths, then queries re-read entries and apply
+Python filtering. This keeps synonym expansion, CJK bigram matching, and
+min_support section passthrough consistent across indexed search and fallback.
+"""
 
 from __future__ import annotations
 
 import logging
-import shutil
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import ValidationError
-
 from core.models import Entry
-from core.storage import read_entry
-from index.cjk import cjk_bigram_match, contains_cjk
-from index.sqlite_index import IndexBuildResult, SQLiteMetadataIndex
+from index.cjk import cjk_bigram_match
+from index.sqlite_index import (
+    IndexBuildResult,
+    IndexUnavailable,
+    SQLiteMetadataIndex,
+    read_valid_entries_from_source,
+)
 from index.synonyms import expand_query_terms, load_synonym_groups
 from index.types import SearchResult, SearchScope
 
@@ -95,11 +101,10 @@ class SearchService:
         indexed = self.agent_index.read_entries(self.kb_root)
         entries = [item.entry for item in indexed]
         if include_pending:
-            entries.extend(_read_entries_from_dir(self.kb_root / PENDING_DIR))
+            entries.extend(self._read_source_entries(PENDING_DIR))
         return _search_entries(
             entries,
             kb_root=self.kb_root,
-            source_dirs=(PUBLISHED_DIR,),
             query=query,
             scope=scope,
             expand_synonyms=expand_synonyms,
@@ -122,7 +127,31 @@ class SearchService:
         return _search_entries(
             [item.entry for item in indexed],
             kb_root=self.kb_root,
-            source_dirs=(PUBLISHED_DIR,),
+            query=query,
+            scope=scope,
+            expand_synonyms=expand_synonyms,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+        )
+
+    def search_agent_direct(
+        self,
+        query: str,
+        *,
+        scope: SearchScope | None = None,
+        include_pending: bool = False,
+        expand_synonyms: bool = True,
+        limit: int = 20,
+        offset: int = 0,
+        sort: str = "score",
+    ) -> list[SearchResult]:
+        entries = self._read_source_entries(PUBLISHED_DIR)
+        if include_pending:
+            entries.extend(self._read_source_entries(PENDING_DIR))
+        return _search_entries(
+            entries,
+            kb_root=self.kb_root,
             query=query,
             scope=scope,
             expand_synonyms=expand_synonyms,
@@ -134,12 +163,20 @@ class SearchService:
     def search_research(self, query: str) -> list[SearchResult]:
         return self.research_index.search(query)
 
+    def _read_source_entries(self, source_dir: str) -> list[Entry]:
+        try:
+            indexed, _ = read_valid_entries_from_source(
+                self.kb_root, source_dir, context=f"{source_dir} direct search"
+            )
+        except ValueError as exc:
+            raise IndexUnavailable(f"invalid search source dir: {source_dir}") from exc
+        return [item.entry for item in indexed]
+
 
 def _search_entries(
     entries: list[Entry],
     *,
     kb_root: Path,
-    source_dirs: tuple[str, ...],
     query: str,
     scope: SearchScope | None,
     expand_synonyms: bool,
@@ -150,8 +187,6 @@ def _search_entries(
     scope = scope or {}
     synonym_groups = load_synonym_groups(kb_root / "synonyms.jsonl")
     terms = expand_query_terms(query, synonym_groups, enabled=expand_synonyms)
-    rg_paths = _ripgrep_candidate_paths(kb_root, source_dirs, terms)
-    del rg_paths  # Candidate discovery is best-effort; correctness is enforced below.
     matched_results: list[tuple[Entry, SearchResult]] = []
     for entry in entries:
         result = _search_result_for(entry, terms=terms, original_query=query, scope=scope)
@@ -160,62 +195,6 @@ def _search_entries(
     sorted_results = _sort_results(matched_results, sort)
     start = max(offset, 0)
     return sorted_results[start : start + max(limit, 0)]
-
-
-def _read_entries_from_dir(directory: Path) -> list[Entry]:
-    if not directory.exists():
-        return []
-    entries: list[Entry] = []
-    for path in sorted(directory.glob("*.md")):
-        if not path.is_file():
-            continue
-        try:
-            entries.append(read_entry(path))
-        except (OSError, ValidationError, ValueError) as exc:
-            LOGGER.warning("skipping unreadable entry file during search: %s (%s)", path, exc)
-    return entries
-
-
-def _ripgrep_candidate_paths(
-    kb_root: Path,
-    source_dirs: tuple[str, ...],
-    terms: list[str],
-) -> set[Path]:
-    rg = shutil.which("rg")
-    if rg is None:
-        return set()
-    roots = [(kb_root / dirname).resolve() for dirname in source_dirs]
-    roots = [root for root in roots if root.exists()]
-    if not roots:
-        return set()
-    paths: set[Path] = set()
-    for term in terms:
-        if not term or contains_cjk(term):
-            continue
-        result = subprocess.run(
-            [
-                rg,
-                "--files-with-matches",
-                "--fixed-strings",
-                "--ignore-case",
-                "--glob",
-                "*.md",
-                "--",
-                term,
-                *[str(root) for root in roots],
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode not in {0, 1}:
-            LOGGER.warning("ripgrep search failed for term %r: %s", term, result.stderr.strip())
-            continue
-        for line in result.stdout.splitlines():
-            candidate = Path(line).resolve()
-            if any(candidate.is_relative_to(root) for root in roots):
-                paths.add(candidate)
-    return paths
 
 
 def _search_result_for(

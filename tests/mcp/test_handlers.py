@@ -77,20 +77,20 @@ def test_search_kb_support_scope_can_match_section(handlers: MCPHandlers) -> Non
     payload = entry_payload(entry_id="KB-2026-0001", trust_state="published")
     payload["credibility"]["support_strength"] = "weak"
     payload["section_credibility"] = {
-        "Root Cause": {"claim_type": "fact", "support_strength": "strong", "evidence": []}
+        "根因": {"claim_type": "fact", "support_strength": "strong", "evidence": []}
     }
     _write_payload(handlers.kb_root / "entries" / "KB-2026-0001.md", payload)
 
     results = handlers.search_kb("decoder", scope={"min_support": "strong"})
 
     assert len(results) == 1
-    assert results[0]["matched_section"] == "Root Cause"
+    assert results[0]["matched_section"] == "根因"
 
 
 def test_get_entry_returns_complete_agent_view(handlers: MCPHandlers) -> None:
     payload = entry_payload(entry_id="KB-2026-0001", trust_state="published")
     payload["section_credibility"] = {
-        "Evidence": {
+        "现象": {
             "claim_type": "observation",
             "support_strength": "strong",
             "evidence": [{"type": "human_note", "excerpt": "Section observation."}],
@@ -111,7 +111,7 @@ def test_get_entry_returns_complete_agent_view(handlers: MCPHandlers) -> None:
     assert result["credibility"]["claim_type"] == "observation"
     assert result["credibility"]["support_strength"] == "strong"
     assert result["credibility"]["evidence"][0]["type"] == "human_note"
-    assert result["section_credibility"]["Evidence"]["support_strength"] == "strong"
+    assert result["section_credibility"]["现象"]["support_strength"] == "strong"
     assert result["code_binding"]["paths"] == ["decoder/foo.c"]
     assert result["code_binding"]["stale"] is True
     assert result["code_binding"]["stale_reason"] == "path changed"
@@ -234,6 +234,32 @@ def test_search_kb_uses_phase4_index_for_synonym_expansion(handlers: MCPHandlers
         "stale",
         "score",
     }.issubset(results[0])
+
+
+def test_search_kb_fallback_reuses_synonym_and_cjk_matching(handlers: MCPHandlers) -> None:
+    (handlers.kb_root / "synonyms.jsonl").parent.mkdir(parents=True, exist_ok=True)
+    (handlers.kb_root / "synonyms.jsonl").write_text(
+        '{"canonical": "花屏", "synonyms": ["绿屏", "画面错乱"]}\n',
+        encoding="utf-8",
+    )
+    payload = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    payload["title"] = "花屏 defect case"
+    payload["body"] = body_for().replace("现象 content.", "画面出现绿屏。")
+    _write_payload(handlers.kb_root / "entries" / "KB-2026-0001.md", payload)
+
+    synonym_results = handlers.search_kb("绿屏")
+    cjk_results = handlers.search_kb("画面绿屏", expand_synonyms=False)
+
+    assert [result["id"] for result in synonym_results] == ["KB-2026-0001"]
+    assert [result["id"] for result in cjk_results] == ["KB-2026-0001"]
+
+
+def test_search_kb_fallback_skips_entry_with_wrong_trust_state(handlers: MCPHandlers) -> None:
+    payload = entry_payload(entry_id="KB-2026-0001", trust_state="research")
+    payload["title"] = "wrong-state-token"
+    _write_payload(handlers.kb_root / "entries" / "KB-2026-0001.md", payload)
+
+    assert handlers.search_kb("wrong-state-token") == []
 
 
 def test_search_kb_index_mode_keeps_pending_overlay_to_staging_only(

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,8 +28,11 @@ def load_synonym_groups(path: Path) -> list[SynonymGroup]:
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if not line.strip():
             continue
-        payload = json.loads(line)
-        groups.append(_group_from_payload(payload, path=path, line_number=line_number))
+        try:
+            payload = json.loads(line)
+            groups.append(_group_from_payload(payload, path=path, line_number=line_number))
+        except (json.JSONDecodeError, ValueError) as exc:
+            LOGGER.warning("skipping invalid synonym line: %s:%s (%s)", path, line_number, exc)
     return groups
 
 
