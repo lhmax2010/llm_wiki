@@ -18,7 +18,7 @@ def build_audit_record(context: MiddlewareContext) -> AuditRecord:
         relative_path = persisted_path.resolve().relative_to(kb_root.resolve()).as_posix()
     except ValueError:
         relative_path = persisted_path.name
-    return {
+    record: AuditRecord = {
         "timestamp": datetime.now(UTC).isoformat(),
         "user": auth["user"],
         "role": auth["role"],
@@ -27,6 +27,10 @@ def build_audit_record(context: MiddlewareContext) -> AuditRecord:
         "target_dir": context["target_dir"],
         "path": relative_path,
     }
+    review_level = context.get("review_level")
+    if review_level is not None:
+        record["review_level"] = review_level
+    return record
 
 
 def preflight_audit_path(path: Path) -> None:

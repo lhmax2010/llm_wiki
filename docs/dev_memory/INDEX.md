@@ -4,7 +4,7 @@
 > 以及上一 Phase 的 plan/progress/result。
 
 ## 当前状态
-- 当前活跃 Phase：无（Phase 4 已 Merge；下一步按 DAG 进入 Phase 5 前置）
+- 当前活跃 Phase：phase_5_staging_review（已建 plan，待风险档确认）
 - 最后已 Merge Phase：phase_4_index_search
 
 ## Phase 列表
@@ -14,5 +14,6 @@
 | phase_2 | governed-api-pipeline | 已 Merge | `docs/dev_memory/phase_2_governed_api_pipeline/` | https://github.com/lhmax2010/llm_wiki/pull/2 | b0a54ed (merge), 6a0cbd0 (PR head) |
 | phase_3 | mcp-server | 已 Merge | `docs/dev_memory/phase_3_mcp_server/` | https://github.com/lhmax2010/llm_wiki/pull/3 | e8c5ce9 (merge), 176ebd4 (PR head) |
 | phase_4 | index-search | 已 Merge | `docs/dev_memory/phase_4_index_search/` | https://github.com/lhmax2010/llm_wiki/pull/4 | 8c33dbd (merge), 053a5b5 (PR head) |
+| phase_5 | staging-review | 进行中 | `docs/dev_memory/phase_5_staging_review/` | 待创建 | d740e86 (baseline) |
 
 （状态：进行中 / 待 Review / 已 Merge / 已 Skip。每次状态变化立即更新。）

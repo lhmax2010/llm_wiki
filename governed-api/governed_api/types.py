@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Required, TypedDict
+from typing import Any, Literal, NotRequired, Required, TypedDict
 
 from core.errors import ValidationIssue
 from core.id_allocator import IDAllocator
@@ -37,6 +37,10 @@ class AuditRecord(TypedDict):
     entry_id: str
     target_dir: str
     path: str
+    decision: NotRequired[str]
+    note: NotRequired[str]
+    review_level: NotRequired[ReviewLevel]
+    reviewer: NotRequired[str]
 
 
 class MiddlewareContext(TypedDict, total=False):
