@@ -27,6 +27,7 @@ class AuthInfo(TypedDict, total=False):
     user: Required[str]
     role: str
     permissions: list[str]
+    author_type: str
 
 
 class AuditRecord(TypedDict):
