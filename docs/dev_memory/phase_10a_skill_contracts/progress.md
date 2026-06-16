@@ -26,6 +26,7 @@
 
 ## TODO
 
+- [后续] `_is_prohibited_match` 的窗口（前 16 / 后 8 字符）是启发式。否定词离危险动作很远时可能误判为后门；这是误报方向的安全取舍，后续可结合真实 skill 维护反馈调优窗口。
 - [后续] m4 正向守护：补充“skill 必须积极要求 evidence 驱动”的更强校验，而不只抓负向危险表达。
 - [后续] 跨行绕过：当前 validator 是逐行规则，`直接写` 与 `kb/entries` 被拆成两行时仍需更强检测。
 - [后续] CI 集成：把 `uv run python scripts/validate_skills.py` 纳入仓库 CI/status check，避免 skill 后续被污染。
