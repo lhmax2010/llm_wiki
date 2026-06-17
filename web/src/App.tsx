@@ -1,7 +1,29 @@
 import { FormEvent, useEffect, useState } from "react";
-import { getEntry, listCategories, searchEntries } from "./api";
-import type { Categories, Entry, SearchResult } from "./types";
+import { getEntry, listCategories, proposeEntry, proposeUpdate, searchEntries } from "./api";
+import type { Categories, Entry, EntryWritePayload, SearchResult, WriteResult } from "./types";
 import "./styles.css";
+
+type EditorMode = "new" | "edit";
+
+type EditorState = {
+  mode: EditorMode;
+  title: string;
+  module: string;
+  entryType: string;
+  body: string;
+  tags: string;
+  evidence: string;
+};
+
+const EMPTY_EDITOR: EditorState = {
+  mode: "new",
+  title: "",
+  module: "",
+  entryType: "defect_case",
+  body: "",
+  tags: "",
+  evidence: ""
+};
 
 function App() {
   const [query, setQuery] = useState("");
@@ -10,6 +32,9 @@ function App() {
   const [categories, setCategories] = useState<Categories | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [writer, setWriter] = useState("");
+  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
 
   useEffect(() => {
     void listCategories()
@@ -50,15 +75,59 @@ function App() {
     void runSearch(query);
   }
 
+  function startNewEntry() {
+    setWriteResult(null);
+    setEditor(EMPTY_EDITOR);
+  }
+
+  function startEditEntry() {
+    if (!selected) {
+      return;
+    }
+    setWriteResult(null);
+    setEditor({
+      mode: "edit",
+      title: selected.title,
+      module: selected.module,
+      entryType: selected.entry_type,
+      body: selected.body,
+      tags: selected.tags.join(", "),
+      evidence: evidenceText(selected)
+    });
+  }
+
+  async function submitEditor(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!editor) {
+      return;
+    }
+    setError(null);
+    setWriteResult(null);
+    try {
+      const payload = editorPayload(editor);
+      const result =
+        editor.mode === "new"
+          ? await proposeEntry(payload, writer.trim())
+          : await proposeUpdate(selected?.id ?? "", payload, writer.trim());
+      setWriteResult(result);
+      if (result.ok) {
+        setEditor(null);
+        await runSearch(query);
+      }
+    } catch (exc) {
+      setError(errorMessage(exc));
+    }
+  }
+
   return (
     <main className="app-shell">
-      <section className="search-pane" aria-label="知识库搜索">
+      <section className="search-pane" aria-label="Knowledge search">
         <div className="toolbar">
           <div>
             <h1>Unified KB</h1>
             <p>{categories ? `${categories.modules.length} modules indexed` : "Loading index"}</p>
           </div>
-          <span className="state-pill">readonly</span>
+          <span className="state-pill">editable</span>
         </div>
 
         <form className="search-form" onSubmit={onSubmit}>
@@ -74,10 +143,27 @@ function App() {
           </div>
         </form>
 
+        <div className="write-actions">
+          <label htmlFor="kb-user">User</label>
+          <input
+            id="kb-user"
+            value={writer}
+            onChange={(event) => setWriter(event.target.value)}
+            placeholder="user id"
+          />
+          <button type="button" onClick={startNewEntry}>
+            New
+          </button>
+          <button type="button" disabled={!selected} onClick={startEditEntry}>
+            Edit
+          </button>
+        </div>
+
         {error && <p className="error">{error}</p>}
+        {writeResult && <WriteResultPanel result={writeResult} />}
         {loading && <p className="muted">Loading...</p>}
 
-        <div className="result-list" aria-label="搜索结果">
+        <div className="result-list" aria-label="Search results">
           {results.map((result) => (
             <button
               className={selected?.id === result.id ? "result active" : "result"}
@@ -87,7 +173,7 @@ function App() {
             >
               <span className="result-title">{result.title}</span>
               <span className="result-meta">
-                {result.id} · {result.module} · {result.credibility.claim_type}
+                {result.id} / {result.module} / {result.credibility.claim_type}
               </span>
               <span className="result-snippet">{result.snippet}</span>
             </button>
@@ -96,10 +182,123 @@ function App() {
         </div>
       </section>
 
-      <section className="detail-pane" aria-label="条目详情">
-        {selected ? <EntryDetail entry={selected} /> : <p className="muted">Select an entry.</p>}
+      <section className="detail-pane" aria-label="Entry detail">
+        {editor ? (
+          <EntryEditor editor={editor} setEditor={setEditor} onSubmit={submitEditor} />
+        ) : selected ? (
+          <EntryDetail entry={selected} />
+        ) : (
+          <p className="muted">Select an entry.</p>
+        )}
       </section>
     </main>
+  );
+}
+
+function EntryEditor({
+  editor,
+  setEditor,
+  onSubmit
+}: {
+  editor: EditorState;
+  setEditor: (next: EditorState | null) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  return (
+    <form className="entry-editor" onSubmit={onSubmit}>
+      <div className="detail-header">
+        <div>
+          <span className="eyebrow">{editor.mode === "new" ? "new proposal" : "edit proposal"}</span>
+          <h2>{editor.mode === "new" ? "New Entry" : "Edit Entry"}</h2>
+        </div>
+        <button type="button" onClick={() => setEditor(null)}>
+          Cancel
+        </button>
+      </div>
+
+      <div className="editor-grid">
+        <label>
+          Title
+          <input
+            value={editor.title}
+            onChange={(event) => setEditor({ ...editor, title: event.target.value })}
+            required
+          />
+        </label>
+        <label>
+          Module
+          <input
+            value={editor.module}
+            onChange={(event) => setEditor({ ...editor, module: event.target.value })}
+            required
+          />
+        </label>
+        <label>
+          Type
+          <select
+            value={editor.entryType}
+            onChange={(event) => setEditor({ ...editor, entryType: event.target.value })}
+          >
+            <option value="defect_case">defect_case</option>
+            <option value="triage_rule">triage_rule</option>
+            <option value="code_flow">code_flow</option>
+            <option value="log_baseline">log_baseline</option>
+          </select>
+        </label>
+        <label>
+          Tags
+          <input
+            value={editor.tags}
+            onChange={(event) => setEditor({ ...editor, tags: event.target.value })}
+          />
+        </label>
+      </div>
+
+      <label className="editor-block">
+        Evidence
+        <textarea
+          value={editor.evidence}
+          onChange={(event) => setEditor({ ...editor, evidence: event.target.value })}
+          required
+        />
+      </label>
+
+      <label className="editor-block">
+        Body
+        <textarea
+          className="body-input"
+          value={editor.body}
+          onChange={(event) => setEditor({ ...editor, body: event.target.value })}
+          required
+        />
+      </label>
+
+      <button type="submit">Submit</button>
+    </form>
+  );
+}
+
+function WriteResultPanel({ result }: { result: WriteResult }) {
+  return (
+    <div className={result.ok ? "write-result" : "write-result error-box"}>
+      <strong>{result.ok ? `Submitted: ${result.status}` : result.error?.message}</strong>
+      {result.review_level && <span>Review: {result.review_level}</span>}
+      {result.proposed_id && <span>ID: {result.proposed_id}</span>}
+      {result.validation_warnings.length > 0 && (
+        <ul>
+          {result.validation_warnings.map((issue, index) => (
+            <li key={index}>{issue.message}</li>
+          ))}
+        </ul>
+      )}
+      {result.validation_errors.length > 0 && (
+        <ul>
+          {result.validation_errors.map((issue, index) => (
+            <li key={index}>{issue.message}</li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -181,6 +380,32 @@ function TokenList({ values }: { values: string[] }) {
       ))}
     </div>
   );
+}
+
+function editorPayload(editor: EditorState): EntryWritePayload {
+  return {
+    entry_type: editor.entryType,
+    title: editor.title,
+    module: editor.module,
+    body: editor.body,
+    tags: editor.tags
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+    credibility: {
+      claim_type: "observation",
+      support_strength: "strong",
+      evidence: [{ type: "human_note", excerpt: editor.evidence }]
+    }
+  };
+}
+
+function evidenceText(entry: Entry) {
+  const evidence = entry.credibility.evidence[0];
+  if (!evidence) {
+    return "";
+  }
+  return String(evidence.excerpt ?? evidence.ref ?? evidence.uri ?? evidence.filepath ?? "");
 }
 
 function evidenceSummary(item: Record<string, unknown>) {

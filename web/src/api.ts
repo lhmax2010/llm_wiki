@@ -1,4 +1,4 @@
-import type { Categories, Entry, SearchResult } from "./types";
+import type { Categories, Entry, EntryWritePayload, SearchResult, WriteResult } from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -32,4 +32,44 @@ export async function getEntry(id: string): Promise<Entry> {
 
 export async function listCategories(): Promise<Categories> {
   return readJson<Categories>(await fetch("/api/categories"));
+}
+
+export async function proposeEntry(payload: EntryWritePayload, user: string): Promise<WriteResult> {
+  return readWriteJson(
+    await fetch("/api/entries", {
+      method: "POST",
+      headers: writeHeaders(user),
+      body: JSON.stringify(payload)
+    })
+  );
+}
+
+export async function proposeUpdate(
+  id: string,
+  payload: Partial<EntryWritePayload>,
+  user: string
+): Promise<WriteResult> {
+  return readWriteJson(
+    await fetch(`/api/entries/${id}`, {
+      method: "PATCH",
+      headers: writeHeaders(user),
+      body: JSON.stringify(payload)
+    })
+  );
+}
+
+function writeHeaders(user: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "X-KB-User": user,
+    "X-KB-Write-Intent": "web-edit"
+  };
+}
+
+async function readWriteJson(response: Response): Promise<WriteResult> {
+  const payload = (await response.json()) as WriteResult;
+  if (!response.ok && !Array.isArray(payload.validation_errors)) {
+    throw new Error(payload.error?.message ?? `${response.status} ${response.statusText}`);
+  }
+  return payload;
 }

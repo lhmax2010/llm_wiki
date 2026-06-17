@@ -31,6 +31,7 @@ HEAVY_PERMISSION = "review_heavy"
 PUBLISH_PERMISSION = "publish_entry"
 DEPRECATE_PERMISSION = "deprecate_entry"
 VALID_QUEUE_LEVELS: set[ReviewLevel] = {"light", "heavy"}
+UPDATE_REVIEW_OPERATIONS = {"update", "propose_update"}
 ReviewDecision = Literal["approve", "reject"]
 ValidationMode = Literal["full", "no_evidence", "state_only"]
 
@@ -68,6 +69,12 @@ class ReviewOperationResult:
     audit_record: AuditRecord | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewMetadata:
+    review_level: ReviewLevel
+    operation: str | None = None
+
+
 def list_review_queue(
     *,
     kb_root: Path,
@@ -76,7 +83,7 @@ def list_review_queue(
 ) -> ReviewQueue:
     """Return validated pending staging entries for reviewer triage."""
 
-    levels = _review_levels_from_audit(audit_path or _default_audit_path(kb_root))
+    metadata_by_id = _review_metadata_from_audit(audit_path or _default_audit_path(kb_root))
     items: list[ReviewQueueItem] = []
     skipped = 0
     try:
@@ -93,7 +100,12 @@ def list_review_queue(
             LOGGER.warning("review queue: skipping invalid staging filename: %s", candidate)
             skipped += 1
             continue
-        terminal_path = _terminal_entry_path(kb_root, entry_id)
+        metadata = metadata_by_id.get(entry_id, ReviewMetadata("heavy"))
+        terminal_path = _terminal_entry_path(
+            kb_root,
+            entry_id,
+            allow_published_entry=_is_update_proposal(metadata),
+        )
         if terminal_path is not None:
             LOGGER.warning(
                 "review queue: skipping staging residue because terminal entry exists: %s (%s)",
@@ -114,7 +126,7 @@ def list_review_queue(
             skipped += 1
             continue
         entry, resolved = loaded
-        level = levels.get(entry.id, "heavy")
+        level = metadata.review_level
         if level not in VALID_QUEUE_LEVELS:
             level = "heavy"
         items.append(_queue_item(entry, level, resolved, kb_root))
@@ -195,9 +207,16 @@ def _review_transition(
         return _failed("E_SCHEMA", "entry_id must match KB-{year}-{NNNN}", "entry_id")
 
     resolved_audit_path = audit_path or _default_audit_path(kb_root)
-    review_level = _review_levels_from_audit(resolved_audit_path).get(entry_id, "heavy")
+    review_metadata = _review_metadata_from_audit(resolved_audit_path).get(
+        entry_id, ReviewMetadata("heavy")
+    )
+    review_level = review_metadata.review_level
     if review_level not in VALID_QUEUE_LEVELS:
         review_level = "heavy"
+        review_metadata = ReviewMetadata(review_level, review_metadata.operation)
+    allow_republish = (
+        decision == "approve" and target_dir == "entries" and _is_update_proposal(review_metadata)
+    )
     permission_error = _review_permission_error(
         roles_config,
         reviewer,
@@ -213,7 +232,11 @@ def _review_transition(
         return _failed("E_SCHEMA", f"audit path is not writable: {exc}", "audit_path")
 
     try:
-        terminal_path = _terminal_entry_path(kb_root, entry_id)
+        terminal_path = _terminal_entry_path(
+            kb_root,
+            entry_id,
+            allow_published_entry=allow_republish,
+        )
     except ValueError as exc:
         return _failed("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
     if terminal_path is not None:
@@ -240,6 +263,7 @@ def _review_transition(
             target_state=target_state,
             note=note,
             review_level=review_level,
+            allow_republish=allow_republish,
             resolved_audit_path=resolved_audit_path,
         )
     finally:
@@ -258,10 +282,15 @@ def _locked_review_transition(
     target_state: TrustState,
     note: str | None,
     review_level: ReviewLevel,
+    allow_republish: bool,
     resolved_audit_path: Path,
 ) -> ReviewOperationResult:
     try:
-        terminal_path = _terminal_entry_path(kb_root, entry_id)
+        terminal_path = _terminal_entry_path(
+            kb_root,
+            entry_id,
+            allow_published_entry=allow_republish,
+        )
     except ValueError as exc:
         return _failed("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
     if terminal_path is not None:
@@ -281,6 +310,22 @@ def _locked_review_transition(
     source_entry, source_path = loaded
 
     target_path = _target_path(kb_root, target_dir, entry_id)
+    previous_target: Entry | None = None
+    if allow_republish:
+        if not target_path.exists():
+            return _failed(
+                "E_SCHEMA",
+                "published target is required for update republish",
+                "target_path",
+            )
+        try:
+            previous_target = read_entry(target_path)
+        except (OSError, ValidationError, ValueError) as exc:
+            return _failed(
+                "E_SCHEMA",
+                f"published target is unreadable before republish: {exc}",
+                "target_path",
+            )
     reviewed = source_entry.model_copy(
         update={
             "trust_state": target_state,
@@ -317,7 +362,7 @@ def _locked_review_transition(
         validation_mode=validation_mode,
     )
     if post_write is None:
-        _rollback_target(target_path)
+        _rollback_target(target_path, previous_target)
         return _failed("E_SCHEMA", "review target failed post-write validation", "target_path")
     reviewed = post_write[0]
 
@@ -331,11 +376,12 @@ def _locked_review_transition(
         target_dir=target_dir,
         review_level=review_level,
         note=note,
+        operation="review_republish" if allow_republish and decision == "approve" else None,
     )
     try:
         append_audit_record(resolved_audit_path, record)
     except OSError as exc:
-        _rollback_target(target_path)
+        _rollback_target(target_path, previous_target)
         return _failed("E_SCHEMA", f"audit append failed: {exc}", "audit_path")
 
     try:
@@ -460,10 +506,17 @@ def _target_path(
     return path
 
 
-def _terminal_entry_path(kb_root: Path, entry_id: str) -> Path | None:
+def _terminal_entry_path(
+    kb_root: Path,
+    entry_id: str,
+    *,
+    allow_published_entry: bool = False,
+) -> Path | None:
     for terminal_dir in ("entries", "deprecated"):
         path = _target_path(kb_root, terminal_dir, entry_id)
         if path.exists():
+            if terminal_dir == "entries" and allow_published_entry:
+                continue
             return path
     return None
 
@@ -539,6 +592,7 @@ def _build_review_audit_record(
     target_dir: Literal["entries", "deprecated"],
     review_level: ReviewLevel,
     note: str | None,
+    operation: str | None = None,
 ) -> AuditRecord:
     try:
         relative_path = path.resolve().relative_to(kb_root.resolve()).as_posix()
@@ -548,7 +602,7 @@ def _build_review_audit_record(
         "timestamp": datetime.now(UTC).isoformat(),
         "user": reviewer,
         "role": role,
-        "operation": f"review_{decision}",
+        "operation": operation or f"review_{decision}",
         "entry_id": entry_id,
         "target_dir": target_dir,
         "path": relative_path,
@@ -562,14 +616,21 @@ def _build_review_audit_record(
 
 
 def _review_levels_from_audit(audit_path: Path) -> dict[str, ReviewLevel]:
-    levels: dict[str, ReviewLevel] = {}
+    return {
+        entry_id: metadata.review_level
+        for entry_id, metadata in _review_metadata_from_audit(audit_path).items()
+    }
+
+
+def _review_metadata_from_audit(audit_path: Path) -> dict[str, ReviewMetadata]:
+    metadata_by_id: dict[str, ReviewMetadata] = {}
     if not audit_path.is_file():
-        return levels
+        return metadata_by_id
     try:
         lines = audit_path.read_text(encoding="utf-8").splitlines()
     except OSError as exc:
         LOGGER.warning("review service: cannot read audit log for review levels: %s", exc)
-        return levels
+        return metadata_by_id
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -586,17 +647,31 @@ def _review_levels_from_audit(audit_path: Path) -> dict[str, ReviewLevel]:
             continue
         entry_id = record.get("entry_id")
         level = record.get("review_level")
+        operation = record.get("operation")
         if (
             isinstance(entry_id, str)
             and _valid_entry_id(entry_id)
             and level in VALID_QUEUE_LEVELS
             and record.get("target_dir") == "staging"
         ):
-            levels[entry_id] = level
-    return levels
+            metadata_by_id[entry_id] = ReviewMetadata(
+                review_level=level,
+                operation=operation if isinstance(operation, str) else None,
+            )
+    return metadata_by_id
 
 
-def _rollback_target(path: Path) -> None:
+def _rollback_target(path: Path, previous_entry: Entry | None = None) -> None:
+    if previous_entry is not None:
+        try:
+            write_entry(path, previous_entry)
+        except OSError as exc:
+            LOGGER.error(
+                "review target rollback failed: %s (%s) - overwritten review target remains",
+                path,
+                exc,
+            )
+        return
     if not path.exists():
         return
     try:
@@ -639,3 +714,7 @@ def _default_audit_path(kb_root: Path) -> Path:
 
 def _failed(code: str, message: str, field: str | None) -> ReviewOperationResult:
     return ReviewOperationResult(ok=False, error=ApiError(code, message, field))
+
+
+def _is_update_proposal(metadata: ReviewMetadata) -> bool:
+    return metadata.operation in UPDATE_REVIEW_OPERATIONS

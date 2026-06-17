@@ -102,6 +102,25 @@ def test_review_queue_skips_invalid_state_and_published_duplicate(
     assert "terminal entry exists" in caplog.text
 
 
+def test_review_queue_includes_update_proposal_with_published_target(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    queue = list_review_queue(kb_root=kb_root, repo_root=tmp_path)
+
+    assert queue.backlog_count == 1
+    assert queue.items[0].entry_id == "KB-2026-0001"
+    assert queue.items[0].review_level == "heavy"
+
+
 def test_review_queue_skips_when_any_terminal_state_exists(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -164,6 +183,105 @@ def test_approve_publishes_with_same_id_updates_review_metadata_and_audits(
     assert audit["decision"] == "approve"
     assert audit["reviewer"] == "reviewer"
     assert audit["note"] == "content verified"
+
+
+def test_approve_republishes_update_proposal_and_audits(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    original = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "republished.")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending", body=updated_body)
+    _append_audit(
+        kb_root,
+        original.id,
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id=original.id,
+        note="republish accepted",
+    )
+
+    assert result.ok, result.error
+    assert result.target_path == kb_root / "entries" / "KB-2026-0001.md"
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+    republished = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert republished.id == original.id
+    assert republished.body == updated_body
+    assert republished.trust_state == "published"
+    assert republished.reviewer == "reviewer"
+    audit = _last_audit(kb_root)
+    assert audit["operation"] == "review_republish"
+    assert audit["decision"] == "approve"
+    assert audit["target_dir"] == "entries"
+    assert audit["review_level"] == "heavy"
+    assert audit["note"] == "republish accepted"
+
+
+def test_approve_net_new_still_rejects_existing_published_target(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    existing = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_entry",
+    )
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.code == "E_DUP"
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").updated == existing.updated
+    assert (kb_root / "staging" / "KB-2026-0001.md").exists()
+
+
+def test_republish_still_rejects_deprecated_terminal_conflict(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    existing = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    _write_entry(kb_root, "deprecated", "KB-2026-0001", trust_state="deprecated")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.code == "E_DUP"
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").updated == existing.updated
+    assert (kb_root / "staging" / "KB-2026-0001.md").exists()
 
 
 def test_reject_moves_to_deprecated_and_keeps_reject_audit(
@@ -482,6 +600,43 @@ def test_audit_append_failure_rolls_back_target_and_keeps_staging(
     assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
 
 
+def test_republish_audit_failure_restores_existing_published_entry(
+    tmp_path: Path, review_roles: RolesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kb_root = tmp_path / "kb"
+    existing = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "republished.")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending", body=updated_body)
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    def fail_append(*args: object, **kwargs: object) -> None:
+        raise OSError("audit blocked")
+
+    monkeypatch.setattr("review.service.append_audit_record", fail_append)
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.field == "audit_path"
+    assert (kb_root / "staging" / "KB-2026-0001.md").exists()
+    restored = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert restored.body == existing.body
+    assert restored.updated == existing.updated
+
+
 def test_source_cleanup_failure_is_reported_after_audited_publish(
     tmp_path: Path,
     review_roles: RolesConfig,
@@ -561,6 +716,7 @@ def _append_audit(
     *,
     target_dir: str,
     review_level: ReviewLevel,
+    operation: str = "create",
 ) -> None:
     audit_path = kb_root / "indexes" / "audit.jsonl"
     audit_path.parent.mkdir(parents=True, exist_ok=True)
@@ -568,7 +724,7 @@ def _append_audit(
         "timestamp": "2026-06-16T00:00:00+00:00",
         "user": "alice",
         "role": "contributor",
-        "operation": "create",
+        "operation": operation,
         "entry_id": entry_id,
         "target_dir": target_dir,
         "path": f"{target_dir}/{entry_id}.md",

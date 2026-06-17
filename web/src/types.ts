@@ -45,3 +45,30 @@ export type Categories = {
   tags: string[];
   error_codes: string[];
 };
+
+export type WriteIssue = {
+  code: string;
+  field: string;
+  message: string;
+};
+
+export type WriteResult = {
+  ok: boolean;
+  id?: string;
+  proposed_id?: string;
+  status?: string;
+  target_dir?: string;
+  review_level?: string;
+  error?: WriteIssue;
+  validation_errors: WriteIssue[];
+  validation_warnings: WriteIssue[];
+};
+
+export type EntryWritePayload = {
+  entry_type: string;
+  title: string;
+  module: string;
+  body: string;
+  tags: string[];
+  credibility: Credibility;
+};
