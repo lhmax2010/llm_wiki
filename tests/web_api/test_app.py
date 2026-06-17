@@ -225,6 +225,49 @@ def test_published_scan_errors_are_normalized(
     assert exc_info.value.field == "kb_root"
 
 
+def test_get_entry_source_error_response_does_not_leak_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    leaked_path = str(tmp_path / "secret" / "research")
+
+    def fail_read(*_args: object, **_kwargs: object) -> object:
+        raise ValueError(f"bad source {leaked_path}")
+
+    monkeypatch.setattr("web_api.service.read_valid_entry_file", fail_read)
+    client = TestClient(create_app(kb_root=kb_root))
+
+    response = client.get("/api/entries/KB-2026-0001")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "invalid entry source"
+    assert leaked_path not in response.text
+
+
+def test_categories_source_error_response_does_not_leak_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    leaked_path = str(tmp_path / "secret" / "entries")
+
+    def fail_scan(*_args: object, **_kwargs: object) -> tuple[list[object], int]:
+        raise ValueError(f"bad source {leaked_path}")
+
+    monkeypatch.setattr("web_api.service.read_valid_entries_from_source", fail_scan)
+    client = TestClient(create_app(kb_root=tmp_path / "kb"))
+
+    response = client.get("/api/categories")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["message"] == "invalid published source"
+    assert leaked_path not in response.text
+
+
 def _write_payload(path: Path, payload: dict[str, Any]) -> None:
     write_entry(path, Entry.model_validate(payload))
 

@@ -57,7 +57,8 @@
 - `uv run mypy core tests governed-api mcp index scripts research review web_api` -> `Success: no issues found in 58 source files`
 - `uv run ruff format .` -> `58 files left unchanged`
 - `uv run ruff check .` -> `All checks passed!`
-- `uv run pytest --cov --cov-report=term-missing -q` -> `181 passed, 1 warning`; total coverage `91.61%`
+- `uv run pytest --cov --cov-report=term-missing -q` -> `183 passed, 1 warning`; total coverage `91.68%`
+- `$env:PYTHONWARNINGS='error::ResourceWarning'; uv run pytest tests\index -q --no-cov` -> `13 passed`
 - `npm run lint` -> `tsc --noEmit` passed
 - `npm test` -> `2 passed`
 - `npm run build` -> Vite build passed
@@ -76,3 +77,26 @@
 - Codex review must actively test HTTP-specific bypasses: research search, URL traversal to staging/research, absent write routes, bad query params.
 - Dev dependency audit reports high vulnerabilities; production audit is clean. Review whether to pin/upgrade dev tooling after P7a if the audit remains actionable without breaking Vite/Vitest.
 - FastAPI TestClient emits a Starlette deprecation warning about `httpx`; tests pass. Track upstream FastAPI/Starlette guidance before upgrading test transport.
+
+## R14 MINOR Closure
+
+- FIX-1【MINOR】: HTTP error responses could include internal path details when
+  lower-level safe readers raised `ValueError`.
+  - Fix: `WebReadService.get_entry()` and `_published_entries()` now log the
+    original exception server-side and return generic public messages:
+    `invalid entry source` / `invalid published source`.
+  - Tests: added HTTP response tests that inject path-bearing lower-level
+    exceptions and assert the response body does not contain the leaked path.
+
+- FIX-2【MINOR】: reviewer asked to align human index SQLite handling with
+  `closing(sqlite3.connect(...))`.
+  - Audit result: `human_search_index` uses `SQLiteMetadataIndex.read_entries()`,
+    which already wraps SQLite connections in `contextlib.closing`. P7a did not
+    add a new SQLite connection path for human search.
+  - Verification: reran P4/index tests and ResourceWarning gate after the R14 fix.
+
+- TODO recorded in `docs/dev_memory/BACKLOG.md`:
+  - m1: network endpoints currently reuse P4's all-request scan/fallback behavior;
+    add caching/rate limiting later.
+  - n1: `get_entry` returns complete JSON and relies on frontend hiding; formal
+    §5.2 redaction belongs to a later phase.

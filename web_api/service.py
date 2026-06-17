@@ -88,7 +88,8 @@ class WebReadService:
                 context="web api get_entry",
             )
         except ValueError as exc:
-            raise WebApiError("E_SCHEMA", f"invalid entry source: {exc}", "id") from exc
+            LOGGER.warning("web api get_entry invalid entry source for %s: %s", entry_id, exc)
+            raise WebApiError("E_SCHEMA", "invalid entry source", "id") from exc
         if item is None:
             raise WebApiError("E_SCHEMA", f"entry is unreadable or invalid: {entry_id}", "id", 404)
         return item.entry.model_dump(mode="json")
@@ -130,7 +131,8 @@ class WebReadService:
                 context="web api published scan",
             )
         except ValueError as exc:
-            raise WebApiError("E_SCHEMA", f"invalid published source: {exc}", "kb_root") from exc
+            LOGGER.warning("web api published scan invalid source: %s", exc)
+            raise WebApiError("E_SCHEMA", "invalid published source", "kb_root") from exc
         return [item.entry for item in indexed]
 
 

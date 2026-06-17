@@ -23,11 +23,12 @@
   - `uv run ruff format .` -> `58 files left unchanged`
   - `uv run ruff check .` -> `All checks passed!`
   - `uv run mypy core tests governed-api mcp index scripts research review web_api` -> `Success: no issues found in 58 source files`
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `181 passed, 1 warning`
-  - Total coverage: `91.61%`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `183 passed, 1 warning`
+  - Total coverage: `91.68%`
+  - ResourceWarning gate: `$env:PYTHONWARNINGS='error::ResourceWarning'; uv run pytest tests\index -q --no-cov` -> `13 passed`
   - touched files:
     - `web_api/app.py`: `95%`
-    - `web_api/service.py`: `95%`
+    - `web_api/service.py`: `97%`
     - `index/search.py`: `87%`
 - Frontend:
   - `npm run lint` -> passed
