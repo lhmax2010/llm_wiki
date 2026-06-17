@@ -9,6 +9,7 @@ poetry.lock.bak
 .DS_Store
 web/node_modules/
 web/dist/
+web/.vite/
 kb/indexes/*.db
 kb/indexes/*.sqlite
 kb/indexes/**/*.db

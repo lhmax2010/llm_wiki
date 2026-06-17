@@ -43,6 +43,23 @@
   - `GET /api/entries?status=research` -> `422`
   - `POST /api/research` -> `404`
 
+## 运行 / 验收说明
+
+- Start backend from repo root:
+  - `uv run uvicorn web_api.app:app --host 127.0.0.1 --port 8000`
+- Start frontend:
+  - `cd web`
+  - `npm run dev -- --host 127.0.0.1 --port 5174 --strictPort`
+- Visit:
+  - `http://127.0.0.1:5174`
+- Frontend and backend must run at the same time. The frontend calls `/api/*`,
+  and Vite proxies those requests to backend port `8000`.
+- After changing `web/vite.config.ts` proxy settings, restart the Vite dev
+  server. The dev server does not reliably hot-reload proxy config; a stale
+  process can return `index.html` for `/api/*`, causing frontend JSON parsing to
+  fail with `Unexpected token '<'`.
+- `web/.vite/` is Vite local cache and must not be committed.
+
 ## PR 与代码
 
 - PR link: https://github.com/lhmax2010/llm_wiki/pull/8
