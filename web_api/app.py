@@ -29,6 +29,8 @@ from web_api.service import (  # noqa: E402
     WebEntryCreateRequest,
     WebEntryPatchRequest,
     WebReadService,
+    WebReviewDecisionRequest,
+    WebReviewService,
     WebWriteService,
     build_scope,
     write_status_code,
@@ -62,6 +64,12 @@ def create_app(
         id_allocator=id_allocator,
         audit_path=audit_path,
         pipeline_steps=pipeline_steps,
+    )
+    app.state.web_review_service = WebReviewService(
+        repo_root=resolved_repo_root,
+        kb_root=resolved_kb_root,
+        roles_config=resolved_roles_config,
+        audit_path=audit_path,
     )
 
     @app.exception_handler(WebApiError)
@@ -155,6 +163,35 @@ def create_app(
             content=result,
         )
 
+    @app.get("/api/review/queue")
+    def review_queue(
+        service: Annotated[WebReviewService, Depends(_review_service)],
+        user: Annotated[str, Depends(_write_user)],
+    ) -> dict[str, object]:
+        return service.review_queue_for_web(user=user)
+
+    @app.post("/api/review/{entry_id}/approve")
+    def approve_review_item(
+        payload: WebReviewDecisionRequest,
+        service: Annotated[WebReviewService, Depends(_review_service)],
+        user: Annotated[str, Depends(_write_user)],
+        _write_guard: Annotated[None, Depends(_require_write_request)],
+        entry_id: Annotated[str, PathParam(max_length=64)],
+    ) -> JSONResponse:
+        result = service.approve_from_web(entry_id, payload, user=user)
+        return JSONResponse(status_code=write_status_code(result), content=result)
+
+    @app.post("/api/review/{entry_id}/reject")
+    def reject_review_item(
+        payload: WebReviewDecisionRequest,
+        service: Annotated[WebReviewService, Depends(_review_service)],
+        user: Annotated[str, Depends(_write_user)],
+        _write_guard: Annotated[None, Depends(_require_write_request)],
+        entry_id: Annotated[str, PathParam(max_length=64)],
+    ) -> JSONResponse:
+        result = service.reject_from_web(entry_id, payload, user=user)
+        return JSONResponse(status_code=write_status_code(result), content=result)
+
     return app
 
 
@@ -169,6 +206,13 @@ def _write_service(request: Request) -> WebWriteService:
     service = request.app.state.web_write_service
     if not isinstance(service, WebWriteService):
         raise RuntimeError("web write service is not configured")
+    return service
+
+
+def _review_service(request: Request) -> WebReviewService:
+    service = request.app.state.web_review_service
+    if not isinstance(service, WebReviewService):
+        raise RuntimeError("web review service is not configured")
     return service
 
 

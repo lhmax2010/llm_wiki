@@ -130,10 +130,108 @@ describe("App", () => {
       expect(body.changed_fields).toBeUndefined();
     });
   });
+
+  it("loads the review queue and approves with reviewer identity from the user field", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "reviewer");
+    await user.click(screen.getByRole("button", { name: "Review" }));
+
+    expect(await screen.findByLabelText("Review queue")).toBeInTheDocument();
+    expect(screen.getByText("Pending runtime note")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Note"), "Looks good");
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      const queueCall = fetchMock().mock.calls.find(([url]) => url === "/api/review/queue");
+      expect(queueCall?.[1]).toMatchObject({
+        headers: { "X-KB-User": "reviewer" }
+      });
+      const approveCall = fetchMock().mock.calls.find(
+        ([url, init]) => url === "/api/review/KB-2026-0002/approve" && init?.method === "POST"
+      );
+      expect(approveCall).toBeTruthy();
+      const init = approveCall?.[1] as RequestInit;
+      expect(init.headers).toMatchObject({
+        "X-KB-User": "reviewer",
+        "X-KB-Write-Intent": "web-edit"
+      });
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      expect(body).toEqual({ note: "Looks good" });
+      expect(body.reviewer).toBeUndefined();
+      expect(body.role).toBeUndefined();
+      expect(body.trust_state).toBeUndefined();
+    });
+  });
+
+  it("rejects a review item through the review API", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "reviewer");
+    await user.click(screen.getByRole("button", { name: "Review" }));
+    await user.click(await screen.findByRole("button", { name: "Reject" }));
+
+    await waitFor(() => {
+      const rejectCall = fetchMock().mock.calls.find(
+        ([url, init]) => url === "/api/review/KB-2026-0002/reject" && init?.method === "POST"
+      );
+      expect(rejectCall).toBeTruthy();
+      expect(rejectCall?.[1]).toMatchObject({
+        headers: {
+          "X-KB-User": "reviewer",
+          "X-KB-Write-Intent": "web-edit"
+        }
+      });
+    });
+  });
 });
 
 function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = String(input);
+  if (url === "/api/review/queue") {
+    return ok({
+      items: [
+        {
+          entry_id: "KB-2026-0002",
+          title: "Pending runtime note",
+          module: "runtime",
+          entry_type: "defect_case",
+          claim_type: "observation",
+          support_strength: "strong",
+          review_level: "heavy",
+          updated: "2026-06-17T00:00:00Z",
+          path: "staging/KB-2026-0002.md"
+        }
+      ],
+      backlog_count: 1,
+      backlog_warning: false,
+      skipped_files: 0
+    });
+  }
+  if (url === "/api/review/KB-2026-0002/approve" && init?.method === "POST") {
+    return ok({
+      ok: true,
+      decision: "approve",
+      id: "KB-2026-0002",
+      status: "published",
+      review_level: "heavy",
+      validation_errors: [],
+      validation_warnings: []
+    });
+  }
+  if (url === "/api/review/KB-2026-0002/reject" && init?.method === "POST") {
+    return ok({
+      ok: true,
+      decision: "reject",
+      id: "KB-2026-0002",
+      status: "deprecated",
+      review_level: "heavy",
+      validation_errors: [],
+      validation_warnings: []
+    });
+  }
   if (url === "/api/entries" && init?.method === "POST") {
     return ok({
       ok: true,

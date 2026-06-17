@@ -64,6 +64,37 @@ export type WriteResult = {
   validation_warnings: WriteIssue[];
 };
 
+export type ReviewQueueItem = {
+  entry_id: string;
+  title: string;
+  module: string;
+  entry_type: string;
+  claim_type: string;
+  support_strength: string;
+  review_level: string;
+  updated: string;
+  path: string;
+};
+
+export type ReviewQueue = {
+  items: ReviewQueueItem[];
+  backlog_count: number;
+  backlog_warning: boolean;
+  skipped_files: number;
+};
+
+export type ReviewResult = {
+  ok: boolean;
+  decision: "approve" | "reject";
+  id?: string;
+  status?: string;
+  review_level?: string;
+  error?: WriteIssue;
+  warning?: WriteIssue;
+  validation_errors: WriteIssue[];
+  validation_warnings: WriteIssue[];
+};
+
 export type EntryWritePayload = {
   entry_type: string;
   title: string;

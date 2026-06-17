@@ -1,6 +1,23 @@
 import { FormEvent, useEffect, useState } from "react";
-import { getEntry, listCategories, proposeEntry, proposeUpdate, searchEntries } from "./api";
-import type { Categories, Entry, EntryWritePayload, SearchResult, WriteResult } from "./types";
+import {
+  approveReviewItem,
+  getEntry,
+  listCategories,
+  listReviewQueue,
+  proposeEntry,
+  proposeUpdate,
+  rejectReviewItem,
+  searchEntries
+} from "./api";
+import type {
+  Categories,
+  Entry,
+  EntryWritePayload,
+  ReviewQueue,
+  ReviewResult,
+  SearchResult,
+  WriteResult
+} from "./types";
 import "./styles.css";
 
 type EditorMode = "new" | "edit";
@@ -35,6 +52,10 @@ function App() {
   const [writer, setWriter] = useState("");
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
+  const [reviewQueue, setReviewQueue] = useState<ReviewQueue | null>(null);
+  const [showReviewQueue, setShowReviewQueue] = useState(false);
+  const [reviewNote, setReviewNote] = useState("");
+  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
 
   useEffect(() => {
     void listCategories()
@@ -77,6 +98,8 @@ function App() {
 
   function startNewEntry() {
     setWriteResult(null);
+    setReviewResult(null);
+    setShowReviewQueue(false);
     setEditor(EMPTY_EDITOR);
   }
 
@@ -85,6 +108,8 @@ function App() {
       return;
     }
     setWriteResult(null);
+    setReviewResult(null);
+    setShowReviewQueue(false);
     setEditor({
       mode: "edit",
       title: selected.title,
@@ -112,6 +137,37 @@ function App() {
       setWriteResult(result);
       if (result.ok) {
         setEditor(null);
+        await runSearch(query);
+      }
+    } catch (exc) {
+      setError(errorMessage(exc));
+    }
+  }
+
+  async function loadReviewQueue() {
+    setError(null);
+    setReviewResult(null);
+    try {
+      const queue = await listReviewQueue(writer.trim());
+      setReviewQueue(queue);
+      setShowReviewQueue(true);
+      setEditor(null);
+    } catch (exc) {
+      setError(errorMessage(exc));
+    }
+  }
+
+  async function decideReview(id: string, decision: "approve" | "reject") {
+    setError(null);
+    setReviewResult(null);
+    try {
+      const result =
+        decision === "approve"
+          ? await approveReviewItem(id, writer.trim(), reviewNote)
+          : await rejectReviewItem(id, writer.trim(), reviewNote);
+      setReviewResult(result);
+      if (result.ok) {
+        setReviewQueue(await listReviewQueue(writer.trim()));
         await runSearch(query);
       }
     } catch (exc) {
@@ -157,10 +213,14 @@ function App() {
           <button type="button" disabled={!selected} onClick={startEditEntry}>
             Edit
           </button>
+          <button type="button" onClick={() => void loadReviewQueue()}>
+            Review
+          </button>
         </div>
 
         {error && <p className="error">{error}</p>}
         {writeResult && <WriteResultPanel result={writeResult} />}
+        {reviewResult && <ReviewResultPanel result={reviewResult} />}
         {loading && <p className="muted">Loading...</p>}
 
         <div className="result-list" aria-label="Search results">
@@ -185,6 +245,13 @@ function App() {
       <section className="detail-pane" aria-label="Entry detail">
         {editor ? (
           <EntryEditor editor={editor} setEditor={setEditor} onSubmit={submitEditor} />
+        ) : showReviewQueue && reviewQueue ? (
+          <ReviewPanel
+            queue={reviewQueue}
+            note={reviewNote}
+            setNote={setReviewNote}
+            onDecision={(id, decision) => void decideReview(id, decision)}
+          />
         ) : selected ? (
           <EntryDetail entry={selected} />
         ) : (
@@ -192,6 +259,61 @@ function App() {
         )}
       </section>
     </main>
+  );
+}
+
+function ReviewPanel({
+  queue,
+  note,
+  setNote,
+  onDecision
+}: {
+  queue: ReviewQueue;
+  note: string;
+  setNote: (value: string) => void;
+  onDecision: (id: string, decision: "approve" | "reject") => void;
+}) {
+  return (
+    <section className="review-panel" aria-label="Review queue">
+      <div className="detail-header">
+        <div>
+          <span className="eyebrow">review queue</span>
+          <h2>{queue.backlog_count} Pending</h2>
+        </div>
+        {queue.backlog_warning && <span className="status stale">backlog</span>}
+      </div>
+
+      <label className="review-note">
+        Note
+        <textarea value={note} onChange={(event) => setNote(event.target.value)} />
+      </label>
+
+      <div className="review-list">
+        {queue.items.map((item) => (
+          <article className="review-item" key={item.entry_id}>
+            <div>
+              <span className="eyebrow">{item.entry_id}</span>
+              <h3>{item.title}</h3>
+              <p className="result-meta">
+                {item.module} / {item.entry_type} / {item.review_level}
+              </p>
+              <p className="result-snippet">
+                {item.claim_type} / {item.support_strength} / {item.path}
+              </p>
+            </div>
+            <div className="review-actions">
+              <button type="button" onClick={() => onDecision(item.entry_id, "approve")}>
+                Approve
+              </button>
+              <button type="button" className="secondary" onClick={() => onDecision(item.entry_id, "reject")}>
+                Reject
+              </button>
+            </div>
+          </article>
+        ))}
+        {queue.items.length === 0 && <p className="muted">No pending entries.</p>}
+      </div>
+    </section>
   );
 }
 
@@ -284,6 +406,34 @@ function WriteResultPanel({ result }: { result: WriteResult }) {
       <strong>{result.ok ? `Submitted: ${result.status}` : result.error?.message}</strong>
       {result.review_level && <span>Review: {result.review_level}</span>}
       {result.proposed_id && <span>ID: {result.proposed_id}</span>}
+      {result.validation_warnings.length > 0 && (
+        <ul>
+          {result.validation_warnings.map((issue, index) => (
+            <li key={index}>{issue.message}</li>
+          ))}
+        </ul>
+      )}
+      {result.validation_errors.length > 0 && (
+        <ul>
+          {result.validation_errors.map((issue, index) => (
+            <li key={index}>{issue.message}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ReviewResultPanel({ result }: { result: ReviewResult }) {
+  return (
+    <div className={result.ok ? "write-result" : "write-result error-box"}>
+      <strong>
+        {result.ok
+          ? `${result.decision}: ${result.status ?? "done"}`
+          : result.error?.message}
+      </strong>
+      {result.review_level && <span>Review: {result.review_level}</span>}
+      {result.id && <span>ID: {result.id}</span>}
       {result.validation_warnings.length > 0 && (
         <ul>
           {result.validation_warnings.map((issue, index) => (

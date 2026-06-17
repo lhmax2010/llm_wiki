@@ -130,7 +130,7 @@ h3 {
 
 .write-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   gap: 8px;
   align-items: end;
   margin-top: 16px;
@@ -157,7 +157,8 @@ h3 {
 }
 
 .write-actions button,
-.entry-editor button {
+.entry-editor button,
+.review-actions button {
   border: 0;
   border-radius: 6px;
   padding: 10px 14px;
@@ -169,6 +170,60 @@ h3 {
 .write-actions button:disabled {
   background: #cbd5e1;
   color: #64748b;
+}
+
+.review-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.review-note {
+  display: grid;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.review-note textarea {
+  min-height: 84px;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #18212f;
+  background: #ffffff;
+}
+
+.review-list {
+  display: grid;
+  gap: 12px;
+}
+
+.review-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  border: 1px solid #d8dee8;
+  border-radius: 8px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+.review-item h3 {
+  margin: 4px 0 0;
+  font-size: 17px;
+}
+
+.review-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.review-actions .secondary {
+  background: #e2e8f0;
+  color: #334155;
 }
 
 .error {
@@ -347,7 +402,12 @@ h3 {
   .search-row,
   .write-actions,
   .editor-grid,
+  .review-item,
   .facts {
     grid-template-columns: 1fr;
+  }
+
+  .review-actions {
+    justify-content: stretch;
   }
 }
