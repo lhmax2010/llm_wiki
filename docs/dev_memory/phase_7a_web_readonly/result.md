@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-待 review。Phase 7a read-only HTTP API + React minimal frontend 已实现，Python/Frontend gates 与本机 Web smoke 已通过。分支待 PR / 三路 review（Claude + ChatGPT + Codex HTTP 实测）。
+待 review。Phase 7a read-only HTTP API + React minimal frontend 已实现，Python/Frontend gates 与本机 Web smoke 已通过。PR #8 待三路 review（Claude + ChatGPT + Codex HTTP 实测）。
 
 ## 已实现
 
@@ -44,7 +44,10 @@
 
 ## PR 与代码
 
-- PR link: pending.
+- PR link: https://github.com/lhmax2010/llm_wiki/pull/8
+- Commits:
+  - `969e571` - `[Phase 7a] web readonly HTTP API + React`
+  - `56c6fb9` - `[Phase 7a] docs: add PR link`
 - Review prompt: `docs/review/phase_7a_review_prompt.md`
 
 ## 遗留问题 / 风险
