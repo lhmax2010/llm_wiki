@@ -18,6 +18,6 @@
 | phase_5 | staging-review | 已 Merge | `docs/dev_memory/phase_5_staging_review/` | https://github.com/lhmax2010/llm_wiki/pull/5 | 7a26423 (merge), c8ea6a9 (PR head) |
 | phase_6 | research-isolation | 已 Merge | `docs/dev_memory/phase_6_research_isolation/` | https://github.com/lhmax2010/llm_wiki/pull/7 | f31e3ef (merge), 84337f4 (PR head), ff15cf1 (baseline) |
 | phase_10a | skill-contracts | 已 Merge | `docs/dev_memory/phase_10a_skill_contracts/` | https://github.com/lhmax2010/llm_wiki/pull/6 | 486a9f9 (merge), 698ae2d (PR head) |
-| phase_7a | web-readonly | 待 Review | `docs/dev_memory/phase_7a_web_readonly/` | https://github.com/lhmax2010/llm_wiki/pull/8 | 5e77476 (baseline), 56c6fb9 (PR head) |
+| phase_7a | web-readonly | 待 Review | `docs/dev_memory/phase_7a_web_readonly/` | https://github.com/lhmax2010/llm_wiki/pull/8 | 5e77476 (baseline), see PR head |
 
 Status vocabulary: 进行中 / 待 Review / 已 Merge / 已 Skip.

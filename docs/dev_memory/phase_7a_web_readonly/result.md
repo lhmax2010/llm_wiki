@@ -47,7 +47,7 @@
 - PR link: https://github.com/lhmax2010/llm_wiki/pull/8
 - Commits:
   - `969e571` - `[Phase 7a] web readonly HTTP API + React`
-  - `56c6fb9` - `[Phase 7a] docs: add PR link`
+  - docs follow-up: see PR head
 - Review prompt: `docs/review/phase_7a_review_prompt.md`
 
 ## 遗留问题 / 风险
