@@ -41,7 +41,7 @@ all writes run through the Phase 2 Governed API pipeline into `staging/`.
 
 ## PR And Review
 
-- PR link: pending.
+- PR link: https://github.com/lhmax2010/llm_wiki/pull/9
 - Review prompt: `docs/review/phase_8_review_prompt.md`
 - Required review:
   - Claude + ChatGPT + Kimi high-risk review.
