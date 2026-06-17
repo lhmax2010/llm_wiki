@@ -2,10 +2,10 @@
 
 ## Current Status
 
-R14 closure confirmed; ready to merge. Phase 8 implements the minimal Web edit
-surface: humans can propose new entries and propose edits through FastAPI +
+已 Merge。Phase 8 is merged to `main` via PR #9. It implements the minimal Web
+edit surface: humans can propose new entries and propose edits through FastAPI +
 React, and all writes run through the Phase 2 Governed API pipeline into
-`staging/`.
+`staging/`. Checkpoint tag: `checkpoint/phase_8_web_edit`.
 
 Review found 1 BLOCKER, 1 MAJOR, and 2 MINOR items. All have been fixed with
 regression tests, including the P5 update/republish review path.
@@ -65,4 +65,4 @@ regression tests, including the P5 update/republish review path.
 
 ## Next Step
 
-- Merge PR #9 to `main`, then record checkpoint `checkpoint/phase_8_web_edit`.
+- Continue with the next Web or collector phase after confirming the next DAG target.
