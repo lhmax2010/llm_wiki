@@ -1,10 +1,10 @@
 # Phase 7a - Web Readonly / Result
 
-## 当前状态
+## 最终状态
 
-待 review。Phase 7a read-only HTTP API + React minimal frontend 已实现，Python/Frontend gates 与本机 Web smoke 已通过。PR #8 待三路 review（Claude + ChatGPT + Codex HTTP 实测）。
+待 Merge。Phase 7a read-only HTTP API + React minimal frontend 已完成三路 review（Claude + ChatGPT + Codex HTTP 实测），零 BLOCKER / MAJOR；R14 的 2 个 MINOR 已闭环。Python/Frontend gates、ResourceWarning gate 与本机 Web smoke 均已通过，PR #8 可合并。
 
-## 已实现
+## 交付内容
 
 - FastAPI read-only HTTP API:
   - `GET /api/entries`
@@ -17,7 +17,7 @@
   - entry detail panel;
   - frontend hides internal/frontmatter-style fields instead of dumping raw JSON.
 
-## 当前测试快照
+## 测试情况
 
 - Python:
   - `uv run ruff format .` -> `58 files left unchanged`
@@ -48,11 +48,26 @@
 - PR link: https://github.com/lhmax2010/llm_wiki/pull/8
 - Commits:
   - `969e571` - `[Phase 7a] web readonly HTTP API + React`
-  - docs follow-up: see PR head
+  - `f06704d` - `[Phase 7a] fix: R14 minor HTTP error hygiene`
 - Review prompt: `docs/review/phase_7a_review_prompt.md`
+
+## Review 状态
+
+- Claude review: 已完成，无 BLOCKER / MAJOR。
+- ChatGPT review: 已完成，无 BLOCKER / MAJOR。
+- Codex HTTP attack-surface smoke: 已完成，research/staging traversal、write endpoint leakage、invalid id / parameter validation 均未绕过。
+- R14 MINOR:
+  - FIX-1: HTTP 错误对外返回通用文案，具体异常只记日志；测试覆盖响应不泄漏本地路径。
+  - FIX-2: human index SQLite connection audit confirmed existing `closing()` coverage; ResourceWarning gate 通过，无需无效改动。
 
 ## 遗留问题 / 风险
 
 - Full npm audit reports dev-toolchain high vulnerabilities; `npm audit --omit=dev` reports `0 vulnerabilities`.
 - FastAPI TestClient emits a Starlette deprecation warning about `httpx`; tests pass.
+- m1 TODO: network read endpoints currently rebuild/read broadly per request and have no rate limit/cache; acceptable for intranet MVP, tracked in `docs/dev_memory/BACKLOG.md`.
+- n1 TODO: `get_entry` currently returns complete internal JSON fields such as `author` / `git_sha`; human-view redaction policy is tracked in `docs/dev_memory/BACKLOG.md`.
 - Web UI is intentionally minimal: no pagination/filter/sort UI, no edit/review/research UI, no graph/chat.
+
+## 下一阶段计划
+
+- Phase 7b / later Web read improvements: graph/detail UX, filtering/sorting/pagination, and human-facing redaction policy.
