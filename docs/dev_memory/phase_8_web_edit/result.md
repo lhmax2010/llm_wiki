@@ -48,6 +48,37 @@ regression tests, including the P5 update/republish review path.
   - `npm.cmd test` -> `4 passed`
   - `npm.cmd run build` -> passed
 
+## Runtime Notes
+
+- Start backend from repo root:
+  - `uv run uvicorn web_api.app:app --host 127.0.0.1 --port 8000`
+- Start frontend:
+  - `cd web`
+  - `npm run dev -- --host 127.0.0.1 --port 5174 --strictPort`
+- Visit:
+  - `http://127.0.0.1:5174`
+- Frontend and backend must run at the same time. The frontend calls `/api/*`,
+  and Vite proxies those requests to backend port `8000`.
+- After pulling or merging P8, restart the backend. A P7a-era uvicorn process
+  keeps the old GET-only route table in memory and returns `405 Method Not
+  Allowed` with `allow: GET` for `POST /api/entries`, even when the working tree
+  already contains the P8 POST/PATCH routes.
+- Restart the Vite dev server after proxy or frontend changes. A stale Vite
+  process can keep old proxy behavior.
+- Web writes require a configured user. The UI `User` field becomes
+  `X-KB-User`, and `config/roles.yaml` must map that user to a role with
+  `propose_entry` permission. If `users` is empty or the user is unknown, the
+  POST route is live but correctly fails closed with `403 E_PERM`.
+- For local-only smoke testing, use an ignored `config.local.*` roles file and
+  start the backend with `UNIFIED_KB_ROLES` pointing at it. Do not commit real
+  local user mappings.
+- Runtime smoke on 2026-06-17:
+  - stale backend direct `POST /api/entries` -> `405 Method Not Allowed`;
+  - restarted backend/proxy with empty JSON -> `422` JSON validation errors;
+  - restarted backend with local roles override and valid payload through
+    `5174` proxy -> `201 Created`, `KB-2026-0002`, `target_dir=staging`,
+    `status=pending`.
+
 ## PR And Review
 
 - PR link: https://github.com/lhmax2010/llm_wiki/pull/9
