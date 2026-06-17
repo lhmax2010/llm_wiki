@@ -21,6 +21,7 @@ from governed_api import (
     run_pipeline,
     schema_validate,
 )
+from governed_api.roles import ADMIN_PERMISSION
 from governed_api.types import Middleware, MiddlewareContext, MiddlewareResult, fail, ok
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,6 +30,13 @@ from core.models import CodeBinding, Credibility, Entry, RelatedEdge, SectionCre
 from index import IndexUnavailable, SearchService
 from index.sqlite_index import read_valid_entries_from_source, read_valid_entry_file
 from index.types import SearchResult, SearchScope
+from review.service import (
+    ReviewOperationResult,
+    ReviewQueue,
+    approve_staging_entry,
+    list_review_queue,
+    reject_staging_entry,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,6 +55,17 @@ ClaimTypeParam = Literal[
 SupportParam = Literal["weak", "moderate", "strong"]
 SortParam = Literal["score", "updated_desc", "title"]
 WEB_WRITE_SCOPE = "web_edit"
+PATH_LIKE_MESSAGE_RE = re.compile(
+    r"(?:[A-Za-z]:[\\/]|\\\\|/(?:[^/\s]+/)+|(?:^|\s)(?:entries|staging|deprecated|indexes)[\\/])"
+)
+REVIEW_STORAGE_FIELDS = frozenset({"audit_path", "target_path", "kb_root", "staging_residue"})
+REVIEW_PUBLIC_MESSAGES = {
+    "audit_path": "review audit operation failed",
+    "target_path": "review target operation failed",
+    "kb_root": "invalid review storage",
+    "staging_residue": "review source cleanup failed",
+    "entry_id": "review entry is not available",
+}
 
 
 class WebInputModel(BaseModel):
@@ -97,6 +116,10 @@ class WebEntryPatchRequest(WebInputModel):
     trigger: str | None = None
     inferred_fields: list[str] | None = None
     reason: str | None = Field(default=None, max_length=500)
+
+
+class WebReviewDecisionRequest(WebInputModel):
+    note: str | None = Field(default=None, max_length=500)
 
 
 @dataclass(frozen=True, slots=True)
@@ -339,6 +362,79 @@ class WebWriteService:
         return path.is_file()
 
 
+@dataclass(frozen=True, slots=True)
+class WebReviewService:
+    """Human Web review facade backed by the Phase 5 review service."""
+
+    repo_root: Path
+    kb_root: Path
+    roles_config: RolesConfig
+    audit_path: Path | None = None
+
+    def review_queue_for_web(self, *, user: str) -> dict[str, Any]:
+        self._require_queue_permission(user)
+        queue = list_review_queue(
+            kb_root=self.kb_root,
+            repo_root=self.repo_root,
+            audit_path=self.audit_path,
+        )
+        return _review_queue_to_dict(queue)
+
+    def approve_from_web(
+        self,
+        entry_id: str,
+        request: WebReviewDecisionRequest,
+        *,
+        user: str,
+    ) -> dict[str, Any]:
+        _validate_kb_id(entry_id)
+        result = approve_staging_entry(
+            kb_root=self.kb_root,
+            repo_root=self.repo_root,
+            roles_config=self.roles_config,
+            reviewer=user,
+            entry_id=entry_id,
+            note=request.note,
+            audit_path=self.audit_path,
+        )
+        return _review_result_to_dict(result, decision="approve")
+
+    def reject_from_web(
+        self,
+        entry_id: str,
+        request: WebReviewDecisionRequest,
+        *,
+        user: str,
+    ) -> dict[str, Any]:
+        _validate_kb_id(entry_id)
+        result = reject_staging_entry(
+            kb_root=self.kb_root,
+            repo_root=self.repo_root,
+            roles_config=self.roles_config,
+            reviewer=user,
+            entry_id=entry_id,
+            note=request.note,
+            audit_path=self.audit_path,
+        )
+        return _review_result_to_dict(result, decision="reject")
+
+    def _require_queue_permission(self, user: str) -> None:
+        try:
+            _role, permissions = self.roles_config.permissions_for_user(user)
+        except KeyError as exc:
+            raise WebApiError("E_PERM", f"unknown reviewer: {user}", "reviewer", 403) from exc
+        if ADMIN_PERMISSION in permissions:
+            return
+        if "review_light" in permissions or "review_heavy" in permissions:
+            return
+        raise WebApiError(
+            "E_PERM",
+            "permission required: review_light or review_heavy",
+            "auth.permissions",
+            403,
+        )
+
+
 def build_scope(
     *,
     module: str | None = None,
@@ -460,6 +556,65 @@ def _failed_write_result(error: ApiError) -> dict[str, Any]:
     }
 
 
+def _review_queue_to_dict(queue: ReviewQueue) -> dict[str, Any]:
+    return {
+        "items": [
+            {
+                "entry_id": item.entry_id,
+                "title": item.title,
+                "module": item.module,
+                "entry_type": item.entry_type,
+                "claim_type": item.claim_type,
+                "support_strength": item.support_strength,
+                "review_level": item.review_level,
+                "updated": item.updated,
+                "path": item.path,
+            }
+            for item in queue.items
+        ],
+        "backlog_count": queue.backlog_count,
+        "backlog_warning": queue.backlog_warning,
+        "skipped_files": queue.skipped_files,
+    }
+
+
+def _review_result_to_dict(
+    result: ReviewOperationResult,
+    *,
+    decision: str,
+) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "ok": result.ok,
+        "decision": decision,
+        "validation_errors": [],
+        "validation_warnings": [],
+    }
+    if result.review_level is not None:
+        response["review_level"] = result.review_level
+    if result.entry is not None:
+        response["id"] = result.entry.id
+        response["status"] = result.entry.trust_state.value
+    if result.target_path is not None:
+        response["target_path"] = result.target_path.name
+    if result.warning is not None:
+        warning = _review_api_error_to_issue(
+            result.warning,
+            decision=decision,
+            severity="warning",
+        )
+        response["warning"] = warning
+        response["validation_warnings"].append(warning)
+    if result.error is not None:
+        error = _review_api_error_to_issue(
+            result.error,
+            decision=decision,
+            severity="error",
+        )
+        response["error"] = error
+        response["validation_errors"].append(error)
+    return response
+
+
 def _require_web_staging_target(context: MiddlewareContext) -> MiddlewareResult:
     if context.get("target_dir") != PENDING_DIR:
         return fail(
@@ -487,6 +642,36 @@ def write_status_code(result: dict[str, Any], *, success_status: int = 200) -> i
 
 def _api_error_to_issue(error: ApiError) -> dict[str, Any]:
     return {"code": error.code, "field": error.field or "", "message": error.message}
+
+
+def _review_api_error_to_issue(
+    error: ApiError,
+    *,
+    decision: str,
+    severity: str,
+) -> dict[str, Any]:
+    LOGGER.warning(
+        "web review %s returned %s from P5: code=%s field=%s message=%s",
+        decision,
+        severity,
+        error.code,
+        error.field,
+        error.message,
+    )
+    issue = _api_error_to_issue(error)
+    if _review_error_needs_redaction(error):
+        issue["message"] = _public_review_error_message(error)
+    return issue
+
+
+def _review_error_needs_redaction(error: ApiError) -> bool:
+    field = error.field or ""
+    return field in REVIEW_STORAGE_FIELDS or PATH_LIKE_MESSAGE_RE.search(error.message) is not None
+
+
+def _public_review_error_message(error: ApiError) -> str:
+    field = error.field or ""
+    return REVIEW_PUBLIC_MESSAGES.get(field, "review operation failed")
 
 
 def _issue_to_dict(issue: object) -> dict[str, Any]:

@@ -1,4 +1,12 @@
-import type { Categories, Entry, EntryWritePayload, SearchResult, WriteResult } from "./types";
+import type {
+  Categories,
+  Entry,
+  EntryWritePayload,
+  ReviewQueue,
+  ReviewResult,
+  SearchResult,
+  WriteResult
+} from "./types";
 
 async function readJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -58,6 +66,48 @@ export async function proposeUpdate(
   );
 }
 
+export async function listReviewQueue(user: string): Promise<ReviewQueue> {
+  return readJson<ReviewQueue>(
+    await fetch("/api/review/queue", {
+      headers: userHeaders(user)
+    })
+  );
+}
+
+export async function approveReviewItem(
+  id: string,
+  user: string,
+  note: string
+): Promise<ReviewResult> {
+  return readReviewJson(
+    await fetch(`/api/review/${id}/approve`, {
+      method: "POST",
+      headers: writeHeaders(user),
+      body: JSON.stringify(reviewBody(note))
+    })
+  );
+}
+
+export async function rejectReviewItem(
+  id: string,
+  user: string,
+  note: string
+): Promise<ReviewResult> {
+  return readReviewJson(
+    await fetch(`/api/review/${id}/reject`, {
+      method: "POST",
+      headers: writeHeaders(user),
+      body: JSON.stringify(reviewBody(note))
+    })
+  );
+}
+
+function userHeaders(user: string): Record<string, string> {
+  return {
+    "X-KB-User": user
+  };
+}
+
 function writeHeaders(user: string): Record<string, string> {
   return {
     "Content-Type": "application/json",
@@ -66,8 +116,20 @@ function writeHeaders(user: string): Record<string, string> {
   };
 }
 
+function reviewBody(note: string): Record<string, string> {
+  return note.trim() ? { note: note.trim() } : {};
+}
+
 async function readWriteJson(response: Response): Promise<WriteResult> {
   const payload = (await response.json()) as WriteResult;
+  if (!response.ok && !Array.isArray(payload.validation_errors)) {
+    throw new Error(payload.error?.message ?? `${response.status} ${response.statusText}`);
+  }
+  return payload;
+}
+
+async function readReviewJson(response: Response): Promise<ReviewResult> {
+  const payload = (await response.json()) as ReviewResult;
   if (!response.ok && !Array.isArray(payload.validation_errors)) {
     throw new Error(payload.error?.message ?? `${response.status} ${response.statusText}`);
   }

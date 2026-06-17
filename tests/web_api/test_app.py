@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from web_api.app import create_app
 from web_api.service import WebApiError, WebReadService, build_scope
 
 WRITE_HEADERS = {"X-KB-User": "alice", "X-KB-Write-Intent": "web-edit"}
+REVIEW_HEADERS = {"X-KB-User": "reviewer", "X-KB-Write-Intent": "web-edit"}
 
 
 @pytest.fixture
@@ -27,9 +29,29 @@ def roles_config() -> RolesConfig:
         roles={
             "reader": ["read_published"],
             "contributor": ["read_published", "propose_entry"],
+            "light_reviewer": [
+                "read_published",
+                "review_light",
+                "publish_entry",
+                "deprecate_entry",
+            ],
+            "reviewer": [
+                "read_published",
+                "propose_entry",
+                "review_light",
+                "review_heavy",
+                "publish_entry",
+                "deprecate_entry",
+            ],
             "admin": ["*"],
         },
-        users={"alice": "contributor", "reader": "reader", "admin": "admin"},
+        users={
+            "alice": "contributor",
+            "reader": "reader",
+            "light": "light_reviewer",
+            "reviewer": "reviewer",
+            "admin": "admin",
+        },
     )
 
 
@@ -152,7 +174,7 @@ def test_http_surface_is_get_only_and_search_params_are_validated(tmp_path: Path
     assert client.post("/api/entries", json={}).status_code == 403
     assert client.put("/api/entries/KB-2026-0001", json={}).status_code == 405
     assert client.post("/api/research", json={}).status_code == 404
-    assert client.post("/api/review/KB-2026-0001/approve", json={}).status_code == 404
+    assert client.put("/api/review/KB-2026-0001/approve", json={}).status_code == 405
     assert client.get("/api/entries", params={"status": "research"}).status_code == 422
     assert client.get("/api/entries", params={"min_support": "certain"}).status_code == 422
     assert client.get("/api/entries", params={"limit": "1000"}).status_code == 422
@@ -616,6 +638,295 @@ def test_web_patch_refuses_to_overwrite_existing_pending_proposal(
     assert response.json()["error"]["code"] == "E_DUP"
 
 
+def test_review_queue_requires_reviewer_permission(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    missing_user = client.get("/api/review/queue")
+    contributor = client.get("/api/review/queue", headers={"X-KB-User": "alice"})
+    reader = client.get("/api/review/queue", headers={"X-KB-User": "reader"})
+    unknown = client.get("/api/review/queue", headers={"X-KB-User": "mallory"})
+    reviewer = client.get("/api/review/queue", headers={"X-KB-User": "reviewer"})
+
+    assert missing_user.status_code == 403
+    assert contributor.status_code == 403
+    assert reader.status_code == 403
+    assert unknown.status_code == 403
+    assert reviewer.status_code == 200
+    assert reviewer.json()["backlog_count"] == 1
+    assert reviewer.json()["items"][0]["entry_id"] == "KB-2026-0001"
+    assert reviewer.json()["items"][0]["review_level"] == "heavy"
+
+
+def test_web_review_approve_delegates_to_p5_service(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={"note": "verified"},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["status"] == "published"
+    assert response.json()["review_level"] == "heavy"
+    assert (kb_root / "entries" / "KB-2026-0001.md").is_file()
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+    published = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert published.reviewer == "reviewer"
+    audit = _last_audit(kb_root)
+    assert audit["operation"] == "review_approve"
+    assert audit["reviewer"] == "reviewer"
+    assert audit["note"] == "verified"
+
+
+def test_web_review_reject_delegates_to_p5_service(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="light")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.post(
+        "/api/review/KB-2026-0001/reject",
+        json={"note": "duplicate"},
+        headers={"X-KB-User": "light", "X-KB-Write-Intent": "web-edit"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["status"] == "deprecated"
+    assert response.json()["review_level"] == "light"
+    assert (kb_root / "deprecated" / "KB-2026-0001.md").is_file()
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+    audit = _last_audit(kb_root)
+    assert audit["operation"] == "review_reject"
+    assert audit["reviewer"] == "light"
+    assert audit["note"] == "duplicate"
+
+
+def test_web_review_approve_republishes_update_proposal(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    original = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    _write_payload(kb_root / "entries" / "KB-2026-0001.md", original)
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "republished.")
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending", body=updated_body),
+    )
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert response.status_code == 200
+    republished = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert republished.body == updated_body
+    assert _last_audit(kb_root)["operation"] == "review_republish"
+
+
+def test_web_review_preserves_p5_terminal_and_audit_rollback_rules(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kb_root = tmp_path / "kb"
+    existing = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    _write_payload(kb_root / "entries" / "KB-2026-0001.md", existing)
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_entry",
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    duplicate = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["error"]["code"] == "E_DUP"
+    assert duplicate.json()["error"]["message"] == "review entry is not available"
+    assert str(kb_root) not in duplicate.text
+    assert "terminal entry already exists" not in duplicate.text
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").updated == existing["updated"]
+
+    (kb_root / "staging" / "KB-2026-0001.md").unlink()
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "republished.")
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending", body=updated_body),
+    )
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    leaked_audit_path = str(tmp_path / "secret" / "audit.jsonl")
+
+    def fail_append(*args: object, **kwargs: object) -> None:
+        raise OSError(f"audit blocked at {leaked_audit_path}")
+
+    monkeypatch.setattr("review.service.append_audit_record", fail_append)
+    rollback = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert rollback.status_code == 400
+    assert rollback.json()["error"]["field"] == "audit_path"
+    assert rollback.json()["error"]["message"] == "review audit operation failed"
+    assert leaked_audit_path not in rollback.text
+    assert "secret" not in rollback.text
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").body == str(existing["body"])
+    assert (kb_root / "staging" / "KB-2026-0001.md").exists()
+
+
+def test_web_review_warning_response_does_not_leak_cleanup_path(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+    original_unlink = Path.unlink
+    leaked_source_path = str(kb_root / "staging" / "KB-2026-0001.md")
+
+    def fail_staging_cleanup(self: Path, missing_ok: bool = False) -> None:
+        if self.name == "KB-2026-0001.md" and self.parent.name == "staging":
+            raise OSError(f"cleanup blocked for {leaked_source_path}")
+        return original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_staging_cleanup)
+
+    response = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["warning"]["field"] == "staging_residue"
+    assert response.json()["warning"]["message"] == "review source cleanup failed"
+    assert leaked_source_path not in response.text
+    assert str(kb_root) not in response.text
+
+
+def test_web_review_permissions_and_trust_boundary_attacks(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    contributor = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=WRITE_HEADERS,
+    )
+    spoofed_role = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers={**WRITE_HEADERS, "X-KB-Role": "admin"},
+    )
+    missing_intent = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers={"X-KB-User": "reviewer"},
+    )
+    form_encoded = client.post(
+        "/api/review/KB-2026-0001/approve",
+        data={"note": "form"},
+        headers=REVIEW_HEADERS,
+    )
+    injected = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={"note": "ok", "reviewer": "admin", "trust_state": "published"},
+        headers=REVIEW_HEADERS,
+    )
+    traversal = client.post(
+        "/api/review/%2E%2E%2Fresearch%2FKB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+    lock_dir = kb_root / "indexes" / "review_locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    (lock_dir / "KB-2026-0001.lock").write_text("already running\n", encoding="utf-8")
+    locked = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert contributor.status_code == 403
+    assert contributor.json()["error"]["field"] == "auth.permissions"
+    assert spoofed_role.status_code == 403
+    assert missing_intent.status_code == 403
+    assert form_encoded.status_code == 415
+    assert injected.status_code == 422
+    assert traversal.status_code in {400, 404}
+    assert locked.status_code == 409
+    assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
+
+
 def _write_payload(path: Path, payload: dict[str, Any]) -> None:
     write_entry(path, Entry.model_validate(payload))
 
@@ -640,3 +951,35 @@ def _web_create_payload() -> dict[str, Any]:
     for field in ("schema_version", "trust_state", "author_type", "created", "updated"):
         payload.pop(field, None)
     return payload
+
+
+def _append_audit(
+    kb_root: Path,
+    entry_id: str,
+    *,
+    target_dir: str,
+    review_level: str,
+    operation: str = "propose_entry",
+) -> None:
+    audit_path = kb_root / "indexes" / "audit.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    record: dict[str, object] = {
+        "timestamp": "2026-06-17T00:00:00+00:00",
+        "user": "alice",
+        "role": "contributor",
+        "operation": operation,
+        "entry_id": entry_id,
+        "target_dir": target_dir,
+        "path": f"{target_dir}/{entry_id}.md",
+        "review_level": review_level,
+    }
+    with audit_path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True))
+        handle.write("\n")
+
+
+def _last_audit(kb_root: Path) -> dict[str, object]:
+    lines = (kb_root / "indexes" / "audit.jsonl").read_text(encoding="utf-8").splitlines()
+    value = json.loads(lines[-1])
+    assert isinstance(value, dict)
+    return value
