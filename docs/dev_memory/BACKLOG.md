@@ -37,3 +37,15 @@
 - [ ] Clarify P8 update trust-state placeholder comments. Update payloads start
   from the published entry and `review_route` converts the proposal to pending;
   this is correct but easy to misread.
+
+## Web Review Hardening
+
+- [ ] Review P4/P5 SQLite connection lifecycle and standardize `closing()` usage
+  where needed. Phase 8b review noted ResourceWarning risk in inherited index /
+  review paths, but it is not specific to the Web review wrapper.
+- [ ] Rename `_write_user` or split a `_review_user` dependency. Phase 8b uses
+  the same intranet `X-KB-User` boundary for `GET /api/review/queue`, which is
+  reviewer-only but not a write action.
+- [ ] Revisit queue visibility by review level if the reviewer pool grows.
+  Current MVP lets any reviewer-capable user see the queue metadata; future
+  role separation can hide heavy items from light-only reviewers.

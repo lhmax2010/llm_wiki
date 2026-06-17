@@ -789,6 +789,9 @@ def test_web_review_preserves_p5_terminal_and_audit_rollback_rules(
     )
     assert duplicate.status_code == 409
     assert duplicate.json()["error"]["code"] == "E_DUP"
+    assert duplicate.json()["error"]["message"] == "review entry is not available"
+    assert str(kb_root) not in duplicate.text
+    assert "terminal entry already exists" not in duplicate.text
     assert read_entry(kb_root / "entries" / "KB-2026-0001.md").updated == existing["updated"]
 
     (kb_root / "staging" / "KB-2026-0001.md").unlink()
@@ -805,8 +808,10 @@ def test_web_review_preserves_p5_terminal_and_audit_rollback_rules(
         operation="propose_update",
     )
 
+    leaked_audit_path = str(tmp_path / "secret" / "audit.jsonl")
+
     def fail_append(*args: object, **kwargs: object) -> None:
-        raise OSError("audit blocked")
+        raise OSError(f"audit blocked at {leaked_audit_path}")
 
     monkeypatch.setattr("review.service.append_audit_record", fail_append)
     rollback = client.post(
@@ -817,8 +822,47 @@ def test_web_review_preserves_p5_terminal_and_audit_rollback_rules(
 
     assert rollback.status_code == 400
     assert rollback.json()["error"]["field"] == "audit_path"
+    assert rollback.json()["error"]["message"] == "review audit operation failed"
+    assert leaked_audit_path not in rollback.text
+    assert "secret" not in rollback.text
     assert read_entry(kb_root / "entries" / "KB-2026-0001.md").body == str(existing["body"])
     assert (kb_root / "staging" / "KB-2026-0001.md").exists()
+
+
+def test_web_review_warning_response_does_not_leak_cleanup_path(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+    original_unlink = Path.unlink
+    leaked_source_path = str(kb_root / "staging" / "KB-2026-0001.md")
+
+    def fail_staging_cleanup(self: Path, missing_ok: bool = False) -> None:
+        if self.name == "KB-2026-0001.md" and self.parent.name == "staging":
+            raise OSError(f"cleanup blocked for {leaked_source_path}")
+        return original_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_staging_cleanup)
+
+    response = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["warning"]["field"] == "staging_residue"
+    assert response.json()["warning"]["message"] == "review source cleanup failed"
+    assert leaked_source_path not in response.text
+    assert str(kb_root) not in response.text
 
 
 def test_web_review_permissions_and_trust_boundary_attacks(

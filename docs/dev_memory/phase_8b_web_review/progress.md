@@ -73,16 +73,43 @@
   - Frontend tests cover review queue loading, approve and reject calls, headers,
     and the absence of reviewer/role/trust-state fields in request bodies.
 
+## R14 Follow-up Fixes
+
+- FIX-1 (MINOR): Web review now redacts P5 review `ApiError` and warning
+  messages at the HTTP boundary when they contain path-like text or refer to
+  internal storage fields such as `audit_path`, `target_path`, `kb_root`, or
+  `staging_residue`.
+  - Root cause: Phase 8b correctly delegated to P5, but also forwarded P5
+    diagnostic messages verbatim. P5 is a local service and may include absolute
+    paths in messages such as terminal conflicts, audit failures, and staging
+    cleanup warnings.
+  - Fix: `WebReviewService` keeps P5 logic untouched, logs the original P5
+    error/warning for local debugging, and returns a generic public message to
+    HTTP clients.
+  - Tests: added HTTP assertions that terminal conflicts, audit failures, and
+    source-cleanup warnings do not leak local paths.
+
+## Backlog Notes
+
+- TODO: ResourceWarning / SQLite connection lifecycle. Review P4/P5 SQLite
+  connection ownership together and standardize `closing()` usage where needed.
+- TODO: rename `_write_user` or split a `_review_user` dependency. `GET
+  /api/review/queue` is a read action but reuses the Phase 8 write identity
+  dependency for the current intranet `X-KB-User` boundary.
+- TODO: queue visibility is not split by review level. This is acceptable for
+  the current reviewer pool, but a future UI can hide heavy items from
+  light-only reviewers if the role model needs that separation.
+
 ## Verification So Far
 
-- `uv run pytest tests\web_api -q --no-cov` -> `32 passed, 1 warning`
-- `uv run pytest tests\review tests\web_api -q --no-cov` -> `56 passed, 1 warning`
+- `uv run pytest tests\web_api -q --no-cov` -> `33 passed, 1 warning`
+- `uv run pytest tests\review tests\web_api -q --no-cov` -> `57 passed, 1 warning`
 - `uv run ruff format . --check` -> `58 files already formatted`
 - `uv run ruff check .` -> `All checks passed!`
 - `uv run mypy core tests governed-api mcp index scripts research review web_api` ->
   `Success: no issues found in 58 source files`
 - `uv run pytest --cov --cov-report=term-missing -q` ->
-  `208 passed, 1 warning`; total coverage `92.15%`
+  `209 passed, 1 warning`; total coverage `92.27%`
 - `npm.cmd run lint` -> passed
 - `npm.cmd test` -> `6 passed`
 - `npm.cmd run build` -> passed

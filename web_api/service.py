@@ -55,6 +55,17 @@ ClaimTypeParam = Literal[
 SupportParam = Literal["weak", "moderate", "strong"]
 SortParam = Literal["score", "updated_desc", "title"]
 WEB_WRITE_SCOPE = "web_edit"
+PATH_LIKE_MESSAGE_RE = re.compile(
+    r"(?:[A-Za-z]:[\\/]|\\\\|/(?:[^/\s]+/)+|(?:^|\s)(?:entries|staging|deprecated|indexes)[\\/])"
+)
+REVIEW_STORAGE_FIELDS = frozenset({"audit_path", "target_path", "kb_root", "staging_residue"})
+REVIEW_PUBLIC_MESSAGES = {
+    "audit_path": "review audit operation failed",
+    "target_path": "review target operation failed",
+    "kb_root": "invalid review storage",
+    "staging_residue": "review source cleanup failed",
+    "entry_id": "review entry is not available",
+}
 
 
 class WebInputModel(BaseModel):
@@ -586,11 +597,19 @@ def _review_result_to_dict(
     if result.target_path is not None:
         response["target_path"] = result.target_path.name
     if result.warning is not None:
-        warning = _api_error_to_issue(result.warning)
+        warning = _review_api_error_to_issue(
+            result.warning,
+            decision=decision,
+            severity="warning",
+        )
         response["warning"] = warning
         response["validation_warnings"].append(warning)
     if result.error is not None:
-        error = _api_error_to_issue(result.error)
+        error = _review_api_error_to_issue(
+            result.error,
+            decision=decision,
+            severity="error",
+        )
         response["error"] = error
         response["validation_errors"].append(error)
     return response
@@ -623,6 +642,36 @@ def write_status_code(result: dict[str, Any], *, success_status: int = 200) -> i
 
 def _api_error_to_issue(error: ApiError) -> dict[str, Any]:
     return {"code": error.code, "field": error.field or "", "message": error.message}
+
+
+def _review_api_error_to_issue(
+    error: ApiError,
+    *,
+    decision: str,
+    severity: str,
+) -> dict[str, Any]:
+    LOGGER.warning(
+        "web review %s returned %s from P5: code=%s field=%s message=%s",
+        decision,
+        severity,
+        error.code,
+        error.field,
+        error.message,
+    )
+    issue = _api_error_to_issue(error)
+    if _review_error_needs_redaction(error):
+        issue["message"] = _public_review_error_message(error)
+    return issue
+
+
+def _review_error_needs_redaction(error: ApiError) -> bool:
+    field = error.field or ""
+    return field in REVIEW_STORAGE_FIELDS or PATH_LIKE_MESSAGE_RE.search(error.message) is not None
+
+
+def _public_review_error_message(error: ApiError) -> str:
+    field = error.field or ""
+    return REVIEW_PUBLIC_MESSAGES.get(field, "review operation failed")
 
 
 def _issue_to_dict(issue: object) -> dict[str, Any]:
