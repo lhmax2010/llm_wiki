@@ -86,3 +86,51 @@
 - TODO: replace `X-KB-User` intranet trust header with real authentication before broader rollout.
 - TODO: add proper CSRF/token/session model together with real auth.
 - TODO: build a merge/replace flow for duplicate pending proposals if humans need to update an already pending edit.
+
+## R14 Closure
+
+Root cause from review: P8 write security was sound, but two older component assumptions broke under the new Web edit flow.
+
+- P1/P2 ID allocation assumed callers rebuild the SQLite sequence before allocating.
+- P5 approve assumed `entries/{id}` not existing always meant a net-new publish, but P8 update proposals intentionally target an existing published id.
+
+Fixes:
+
+- FIX-1 BLOCKER: Web create now rebuilds the held `IDAllocator` from `entries/staging/drafts/deprecated` before allocating. `persist()` also has a second guard: if an allocated id already exists in any official ID directory, it returns `E_DUP` before writing.
+  - Test: existing `entries/KB-2026-0001.md` plus empty `ids.sqlite` produces Web `proposed_id=KB-2026-0002`, not `0001`.
+  - Test: stale allocator in `persist()` fails with `E_DUP` and writes no staging file.
+
+- FIX-2 MAJOR: P5 approve now supports update/republish proposals without weakening net-new publish rules.
+  - The authority source is the P2 audit record: only `operation=propose_update` / `update` in the staging audit metadata opens the republish path.
+  - Net-new proposals still reject if `entries/{id}` already exists.
+  - `deprecated/{id}` remains terminal and still blocks republish.
+  - Republish writes `entries/{id}` atomically through `write_entry`, records audit operation `review_republish`, and restores the old published entry if audit append fails.
+  - Queue now includes update proposals with an existing published target instead of treating them as stale residue.
+
+- FIX-3 MINOR: Web writes no longer rely only on the magic `web_edit` scope to stay pending. A Web-only invariant runs after `review_route` and before `persist`; if `target_dir != staging`, it fails before any write.
+
+- FIX-4 MINOR: Added explicit `application/x-www-form-urlencoded` test proving write requests return `415` without JSON content type, while missing write intent remains `403`.
+
+P5 regression focus:
+
+- Update approve covers republish overwrite + `review_republish` audit.
+- Net-new approve still returns `E_DUP` when target exists.
+- Republish still rejects deprecated terminal conflicts.
+- Republish audit failure restores the old published entry and keeps staging.
+- Existing P5 tests for normal approve/reject, permissions, locks, symlink rejection, audit rollback, source cleanup warning, and id fullmatch continue to pass.
+
+R14 verification:
+
+- `uv run pytest tests\review tests\web_api tests\governed_api -q --no-cov` -> `89 passed, 1 warning`
+- `uv run ruff format . --check; uv run ruff check .` -> `58 files already formatted`; `All checks passed!`
+- `uv run mypy core tests governed-api mcp index scripts research review web_api` -> `Success: no issues found in 58 source files`
+- `uv run pytest --cov --cov-report=term-missing -q` -> `202 passed, 1 warning`; total coverage `92.01%`
+- `npm.cmd run lint` -> passed
+- `npm.cmd test` -> `4 passed`
+- `npm.cmd run build` -> passed
+
+R14 TODO:
+
+- Concurrent PATCH TOCTOU: P8 checks for existing pending proposals before write, but there is no per-entry Web edit lock yet.
+- IDAllocator singleton/lifecycle: P8 rebuilds before Web create, but allocator lifetime is still per app/service construction.
+- Trust-state placeholder wording: update payload is built from a published entry before `review_route` changes it to pending; add clearer comments if this confuses future maintainers.

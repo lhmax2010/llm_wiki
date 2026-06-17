@@ -11,7 +11,6 @@ from typing import Any, Literal
 
 from governed_api import (
     ApiError,
-    MiddlewareContext,
     RolesConfig,
     audit_append,
     auth_context,
@@ -22,7 +21,7 @@ from governed_api import (
     run_pipeline,
     schema_validate,
 )
-from governed_api.types import Middleware, MiddlewareResult
+from governed_api.types import Middleware, MiddlewareContext, MiddlewareResult, fail, ok
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.id_allocator import IDAllocator
@@ -279,14 +278,24 @@ class WebWriteService:
     ) -> MiddlewareContext:
         # P8 V1 trusts the intranet boundary plus X-KB-User. This is not real
         # authentication; token/session auth must replace it before wider exposure.
+        allocator = self.id_allocator or IDAllocator(self.kb_root / "indexes" / "ids.sqlite")
+        if operation == "propose_entry":
+            try:
+                allocator.rebuild_from_kb(self.kb_root)
+            except ValueError as exc:
+                raise WebApiError(
+                    "E_SCHEMA",
+                    "id allocator rebuild failed",
+                    "id_allocator",
+                ) from exc
+
         context: MiddlewareContext = {
             "auth": {"user": user, "author_type": "human"},
             "operation": operation,
             "payload": payload,
             "repo_root": self.repo_root,
             "kb_root": self.kb_root,
-            "id_allocator": self.id_allocator
-            or IDAllocator(self.kb_root / "indexes" / "ids.sqlite"),
+            "id_allocator": allocator,
             "claimed_change_scopes": [WEB_WRITE_SCOPE],
         }
         if self.audit_path is not None:
@@ -302,6 +311,7 @@ class WebWriteService:
             evidence_validate(),
             classify_write_route(),
             review_route(),
+            _require_web_staging_target,
             persist(),
             audit_append(),
         )
@@ -448,6 +458,19 @@ def _failed_write_result(error: ApiError) -> dict[str, Any]:
         "validation_errors": [issue],
         "validation_warnings": [],
     }
+
+
+def _require_web_staging_target(context: MiddlewareContext) -> MiddlewareResult:
+    if context.get("target_dir") != PENDING_DIR:
+        return fail(
+            context,
+            ApiError(
+                "E_SCHEMA",
+                "web writes must route to staging",
+                "target_dir",
+            ),
+        )
+    return ok(context)
 
 
 def write_status_code(result: dict[str, Any], *, success_status: int = 200) -> int:

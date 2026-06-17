@@ -30,3 +30,10 @@
   model when proper Web authentication is introduced.
 - [ ] Add a merge/replace flow for duplicate pending proposals. P8 currently
   rejects a second pending edit for the same entry with `E_DUP`.
+- [ ] Add a per-entry Web edit lock or equivalent guard for concurrent PATCH
+  TOCTOU around "pending proposal exists" checks.
+- [ ] Revisit IDAllocator lifetime. P8 rebuilds allocation state before Web
+  create, but allocator ownership/lifecycle is still app-service local.
+- [ ] Clarify P8 update trust-state placeholder comments. Update payloads start
+  from the published entry and `review_route` converts the proposal to pending;
+  this is correct but easy to misread.

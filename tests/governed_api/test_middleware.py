@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +23,8 @@ from governed_api.roles import RolesConfig
 from governed_api.types import MiddlewareContext
 
 from core.errors import IssueCode
+from core.models import Entry
+from core.storage import write_entry
 from core.validation import ValidationReport
 from tests.governed_api.helpers import entry_payload
 
@@ -535,6 +538,28 @@ def test_persist_revalidates_target_dir_before_write(
     assert result["error"].code == "E_SCHEMA"
     assert result["context"]["allocated_id"] == "KB-2026-0001"
     assert not (context["kb_root"] / "entries" / "KB-2026-0001.md").exists()
+
+
+def test_persist_rejects_allocated_id_that_already_exists_in_kb(
+    make_context: Callable[..., MiddlewareContext],
+) -> None:
+    year = datetime.now().year
+    existing_id = f"KB-{year}-0001"
+    context = make_context(payload=entry_payload(entry_id=None, trust_state="pending"))
+    write_entry(
+        context["kb_root"] / "entries" / f"{existing_id}.md",
+        Entry.model_validate(entry_payload(entry_id=existing_id, trust_state="published")),
+    )
+    context = schema_validate()(context)["context"]
+    context["target_dir"] = "staging"
+
+    result = persist()(context)
+
+    assert not result["ok"]
+    assert result["error"] is not None
+    assert result["error"].code == "E_DUP"
+    assert result["context"]["allocated_id"] == existing_id
+    assert not (context["kb_root"] / "staging" / f"{existing_id}.md").exists()
 
 
 def test_audit_append_requires_persisted_path(

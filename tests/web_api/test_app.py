@@ -347,6 +347,33 @@ def test_web_propose_entry_persists_to_staging_and_audit(
     assert (kb_root / "indexes" / "audit.jsonl").is_file()
 
 
+def test_web_create_rebuilds_empty_allocator_before_issuing_id(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    client = TestClient(
+        create_app(
+            repo_root=tmp_path,
+            kb_root=kb_root,
+            roles_config=roles_config,
+            id_allocator=IDAllocator(kb_root / "indexes" / "ids.sqlite"),
+        )
+    )
+
+    response = client.post("/api/entries", json=_web_create_payload(), headers=WRITE_HEADERS)
+
+    assert response.status_code == 201
+    assert response.json()["proposed_id"] == "KB-2026-0002"
+    assert (kb_root / "entries" / "KB-2026-0001.md").is_file()
+    assert (kb_root / "staging" / "KB-2026-0002.md").is_file()
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+
+
 def test_web_propose_update_persists_to_staging_and_keeps_published_entry(
     tmp_path: Path,
     roles_config: RolesConfig,
@@ -394,6 +421,24 @@ def test_web_writes_fail_closed_without_auth_or_write_intent(
     assert missing_all.status_code == 403
     assert missing_intent.status_code == 403
     assert missing_user.status_code == 403
+
+
+def test_web_write_rejects_form_encoded_content_type(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+
+    response = client.post(
+        "/api/entries",
+        data={"title": "form post"},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 415
+    assert response.json()["error"]["field"] == "headers.content-type"
 
 
 def test_web_write_permissions_are_resolved_from_roles_config(

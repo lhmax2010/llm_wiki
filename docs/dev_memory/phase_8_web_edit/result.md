@@ -2,9 +2,12 @@
 
 ## Current Status
 
-Ready for high-risk review. Phase 8 implements the minimal Web edit surface:
-humans can propose new entries and propose edits through FastAPI + React, and
-all writes run through the Phase 2 Governed API pipeline into `staging/`.
+R14 closure ready. Phase 8 implements the minimal Web edit surface: humans can
+propose new entries and propose edits through FastAPI + React, and all writes
+run through the Phase 2 Governed API pipeline into `staging/`.
+
+Review found 1 BLOCKER, 1 MAJOR, and 2 MINOR items. All have been fixed with
+regression tests.
 
 ## Delivered
 
@@ -24,6 +27,11 @@ all writes run through the Phase 2 Governed API pipeline into `staging/`.
   - pending/review/error/warning feedback.
 - Phase 2 warning propagation fix:
   - `persist` preserves earlier validation warnings so Web users see system downgrades.
+- R14 fixes:
+  - Web create rebuilds ID allocation state before issuing IDs and `persist()` rejects allocated-id collisions across official ID directories.
+  - P5 approve supports system-proven update/republish proposals while net-new duplicate publish and deprecated terminal conflicts still fail.
+  - Web writes have an explicit post-review/pre-persist staging invariant.
+  - Form-encoded write requests return `415`.
 
 ## Verification
 
@@ -31,9 +39,9 @@ all writes run through the Phase 2 Governed API pipeline into `staging/`.
   - `uv run ruff format . --check; uv run ruff check .` -> `58 files already formatted`; `All checks passed!`
   - `uv run mypy core tests governed-api mcp index scripts research review web_api` -> `Success: no issues found in 58 source files`
 - Python tests:
-  - `uv run pytest tests\web_api tests\governed_api -q --no-cov` -> `62 passed, 1 warning`
-  - `uv run pytest --cov --cov-report=term-missing -q` -> `194 passed, 1 warning`
-  - Total coverage: `91.95%`
+  - `uv run pytest tests\review tests\web_api tests\governed_api -q --no-cov` -> `89 passed, 1 warning`
+  - `uv run pytest --cov --cov-report=term-missing -q` -> `202 passed, 1 warning`
+  - Total coverage: `92.01%`
 - Frontend:
   - `npm.cmd run lint` -> passed
   - `npm.cmd test` -> `4 passed`

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
 
-from core.id_allocator import IDAllocator
+from core.id_allocator import ID_STATE_DIRS, IDAllocator
 from core.models import Entry, TrustState
 from core.storage import write_entry
 from core.validation import ValidationReport, validate_entry
@@ -332,17 +333,28 @@ def persist() -> Middleware:
             allocated_id = allocator.allocate()
             entry = entry.model_copy(update={"id": allocated_id})
 
+        next_context: MiddlewareContext = context.copy()
+        if allocated_id is not None:
+            next_context["allocated_id"] = allocated_id
+            conflict_path = _existing_id_path(kb_root, allocated_id)
+            if conflict_path is not None:
+                return fail(
+                    next_context,
+                    ApiError(
+                        "E_DUP",
+                        f"allocated id already exists: {conflict_path}",
+                        "id",
+                    ),
+                )
+
         path = kb_root / target_dir / f"{entry.id}.md"
         report = validate_entry(entry, repo_root=repo_root, kb_root=kb_root, entry_path=path)
-        next_context: MiddlewareContext = context.copy()
         next_context["entry"] = report.entry
         next_context["validation_errors"] = report.errors
         next_context["validation_warnings"] = [
             *context.get("validation_warnings", []),
             *report.warnings,
         ]
-        if allocated_id is not None:
-            next_context["allocated_id"] = allocated_id
         next_context["audit_path"] = audit_path
         if report.errors:
             return fail(
@@ -549,3 +561,11 @@ def _rollback_persisted_entry(context: MiddlewareContext) -> None:
             path.unlink()
         except OSError as exc:
             LOGGER.error("回滚失败: %s (%s) - orphaned unaudited entry", path, exc)
+
+
+def _existing_id_path(kb_root: Path, entry_id: str) -> Path | None:
+    for dirname in ID_STATE_DIRS:
+        candidate = kb_root / dirname / f"{entry_id}.md"
+        if candidate.exists():
+            return candidate
+    return None
