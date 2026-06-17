@@ -5,7 +5,7 @@
 ## Current
 
 - Active phase: `none`
-- Last merged phase: `phase_8_web_edit`
+- Last merged phase: `phase_8b_web_review`
 
 ## Phases
 
@@ -20,5 +20,6 @@
 | phase_10a | skill-contracts | 已 Merge | `docs/dev_memory/phase_10a_skill_contracts/` | https://github.com/lhmax2010/llm_wiki/pull/6 | 486a9f9 (merge), 698ae2d (PR head) |
 | phase_7a | web-readonly | 已 Merge | `docs/dev_memory/phase_7a_web_readonly/` | https://github.com/lhmax2010/llm_wiki/pull/8 | 5cc0828 (merge), 306c46b (PR head), 5e77476 (baseline) |
 | phase_8 | web-edit | 已 Merge | `docs/dev_memory/phase_8_web_edit/` | https://github.com/lhmax2010/llm_wiki/pull/9 | 73e406e (merge), 2d2370f (PR head), 61155db (baseline) |
+| phase_8b | web-review | 已 Merge | `docs/dev_memory/phase_8b_web_review/` | https://github.com/lhmax2010/llm_wiki/pull/10 | ee05d58 (merge), 95f5f34 (PR head) |
 
 Status vocabulary: 进行中 / 待 Review / 已 Merge / 已 Skip.
