@@ -5,12 +5,15 @@ description = "Unified Knowledge Base: shared content core for humans and agents
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "fastapi>=0.115,<1",
     "pydantic>=2,<3",
     "pyyaml>=6,<7",
+    "uvicorn[standard]>=0.30,<1",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28,<1",
     "mypy>=1.18.2",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
@@ -55,6 +58,7 @@ addopts = [
     "--cov=index",
     "--cov=review",
     "--cov=research",
+    "--cov=web_api",
     "--cov-report=term-missing",
     "--cov-report=html",
 ]

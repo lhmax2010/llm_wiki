@@ -9,3 +9,14 @@
   when writing seed data. A future hardening pass should normalize these fields
   in `read_entry` or validation, converting datetime/int scalars to strings so
   real human and agent input is more robust.
+
+## Web Readonly Hardening
+
+- [ ] Add cache/rate-limit controls for network read endpoints. P7a keeps the
+  P4 thousand-entry MVP behavior, but exposing all-request scans through HTTP
+  can amplify P4 M1 performance risk. Add caching and request throttling before
+  broader intranet rollout.
+- [ ] Add human-view redaction policy for full `get_entry` JSON. P7a returns
+  complete JSON to the frontend and relies on the UI to hide internal fields;
+  later phases should formalize §5.2 desensitization for fields such as
+  `author`, `git_sha`, and other internal metadata.

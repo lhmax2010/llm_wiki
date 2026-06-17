@@ -231,6 +231,28 @@ class SearchService:
             sort=sort,
         )
 
+    def search_human_direct(
+        self,
+        query: str,
+        *,
+        scope: SearchScope | None = None,
+        expand_synonyms: bool = True,
+        limit: int = 20,
+        offset: int = 0,
+        sort: str = "score",
+    ) -> list[SearchResult]:
+        entries = self._read_source_entries(PUBLISHED_DIR)
+        return _search_entries(
+            entries,
+            kb_root=self.kb_root,
+            query=query,
+            scope=scope,
+            expand_synonyms=expand_synonyms,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+        )
+
     def search_agent_direct(
         self,
         query: str,
