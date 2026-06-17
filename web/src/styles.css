@@ -16,7 +16,9 @@ body {
 }
 
 button,
-input {
+input,
+select,
+textarea {
   font: inherit;
 }
 
@@ -126,9 +128,69 @@ h3 {
   font-weight: 700;
 }
 
+.write-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 16px;
+}
+
+.write-actions label {
+  grid-column: 1 / -1;
+  margin-bottom: -2px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.write-actions input,
+.entry-editor input,
+.entry-editor select,
+.entry-editor textarea {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #18212f;
+  background: #ffffff;
+}
+
+.write-actions button,
+.entry-editor button {
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 14px;
+  background: #1d4ed8;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.write-actions button:disabled {
+  background: #cbd5e1;
+  color: #64748b;
+}
+
 .error {
   margin-top: 12px;
   color: #b42318;
+}
+
+.write-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #f0fdf4;
+  color: #14532d;
+}
+
+.error-box {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #9f1239;
 }
 
 .result-list {
@@ -229,6 +291,39 @@ h3 {
   white-space: pre-wrap;
 }
 
+.entry-editor {
+  display: grid;
+  gap: 18px;
+}
+
+.entry-editor .detail-header button {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.editor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.entry-editor label {
+  display: grid;
+  gap: 8px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.editor-block {
+  width: 100%;
+}
+
+.body-input {
+  min-height: 320px;
+  resize: vertical;
+}
+
 @media (max-width: 780px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -250,6 +345,8 @@ h3 {
 
 @media (max-width: 480px) {
   .search-row,
+  .write-actions,
+  .editor-grid,
   .facts {
     grid-template-columns: 1fr;
   }

@@ -19,7 +19,7 @@ const entry = {
   trust_state: "published",
   stale: false,
   score: 8,
-  body: "## 现象\n8k photo path fails.",
+  body: "## symptom\n8k photo path fails.",
   tags: ["photo"],
   symptom_keywords: ["8k"],
   error_codes: ["-1"],
@@ -49,7 +49,7 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findAllByText("8k photo defect")).toHaveLength(2);
-    expect(screen.getByText("KB-2026-0001 · photo · observation")).toBeInTheDocument();
+    expect(screen.getByText("KB-2026-0001 / photo / observation")).toBeInTheDocument();
     expect(await screen.findByText("human_note: Observed in local seed.")).toBeInTheDocument();
     expect(screen.getByText("published")).toBeInTheDocument();
     expect(screen.getByText("-1")).toBeInTheDocument();
@@ -69,12 +69,100 @@ describe("App", () => {
       expect(fetch).toHaveBeenCalledWith("/api/entries?q=8k");
     });
   });
+
+  it("submits a new entry proposal without governance fields", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "alice");
+    await user.click(screen.getByRole("button", { name: "New" }));
+    await user.type(screen.getByLabelText("Title"), "New decoder note");
+    await user.type(screen.getByLabelText("Module"), "decoder");
+    await user.type(screen.getByLabelText("Tags"), "decoder, 8k");
+    await user.type(screen.getByLabelText("Evidence"), "Observed by reviewer.");
+    await user.type(screen.getByLabelText("Body"), "## symptom\nObserved body.");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      const postCall = fetchMock().mock.calls.find(
+        ([url, init]) => url === "/api/entries" && init?.method === "POST"
+      );
+      expect(postCall).toBeTruthy();
+      const init = postCall?.[1] as RequestInit;
+      expect(init.headers).toMatchObject({
+        "X-KB-User": "alice",
+        "X-KB-Write-Intent": "web-edit"
+      });
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      expect(body.title).toBe("New decoder note");
+      expect(body.tags).toEqual(["decoder", "8k"]);
+      expect(body.id).toBeUndefined();
+      expect(body.trust_state).toBeUndefined();
+      expect(body.author_type).toBeUndefined();
+      expect(body.changed_fields).toBeUndefined();
+    });
+  });
+
+  it("submits an edit proposal for the selected entry", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "alice");
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    await user.clear(screen.getByLabelText("Title"));
+    await user.type(screen.getByLabelText("Title"), "Updated 8k photo defect");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock().mock.calls.find(
+        ([url, init]) => url === "/api/entries/KB-2026-0001" && init?.method === "PATCH"
+      );
+      expect(patchCall).toBeTruthy();
+      const init = patchCall?.[1] as RequestInit;
+      expect(init.headers).toMatchObject({
+        "X-KB-User": "alice",
+        "X-KB-Write-Intent": "web-edit"
+      });
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      expect(body.title).toBe("Updated 8k photo defect");
+      expect(body.id).toBeUndefined();
+      expect(body.trust_state).toBeUndefined();
+      expect(body.changed_fields).toBeUndefined();
+    });
+  });
 });
 
-function mockFetch(input: RequestInfo | URL): Promise<Response> {
+function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url = String(input);
+  if (url === "/api/entries" && init?.method === "POST") {
+    return ok({
+      ok: true,
+      proposed_id: "KB-2026-0002",
+      status: "pending",
+      target_dir: "staging",
+      review_level: "heavy",
+      validation_errors: [],
+      validation_warnings: []
+    });
+  }
+  if (url === "/api/entries/KB-2026-0001" && init?.method === "PATCH") {
+    return ok({
+      ok: true,
+      id: "KB-2026-0001",
+      status: "pending",
+      target_dir: "staging",
+      review_level: "heavy",
+      validation_errors: [],
+      validation_warnings: []
+    });
+  }
   if (url.startsWith("/api/categories")) {
-    return ok({ modules: ["photo"], entry_types: ["defect_case"], tags: ["photo"], error_codes: ["-1"] });
+    return ok({
+      modules: ["photo"],
+      entry_types: ["defect_case"],
+      tags: ["photo"],
+      error_codes: ["-1"]
+    });
   }
   if (url.startsWith("/api/entries/KB-2026-0001")) {
     return ok({ entry });
@@ -92,4 +180,8 @@ function ok(payload: unknown): Promise<Response> {
       headers: { "Content-Type": "application/json" }
     })
   );
+}
+
+function fetchMock() {
+  return fetch as unknown as ReturnType<typeof vi.fn>;
 }

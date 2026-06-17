@@ -337,7 +337,10 @@ def persist() -> Middleware:
         next_context: MiddlewareContext = context.copy()
         next_context["entry"] = report.entry
         next_context["validation_errors"] = report.errors
-        next_context["validation_warnings"] = report.warnings
+        next_context["validation_warnings"] = [
+            *context.get("validation_warnings", []),
+            *report.warnings,
+        ]
         if allocated_id is not None:
             next_context["allocated_id"] = allocated_id
         next_context["audit_path"] = audit_path

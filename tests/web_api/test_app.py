@@ -1,18 +1,36 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from governed_api.roles import RolesConfig
+from governed_api.types import MiddlewareContext, MiddlewareResult, ok
 
+from core.id_allocator import IDAllocator
 from core.models import Entry
-from core.storage import write_entry
+from core.storage import read_entry, write_entry
 from index import SearchService
 from research.store import ResearchRecord, write_research_record
 from tests.governed_api.helpers import entry_payload
 from web_api.app import create_app
 from web_api.service import WebApiError, WebReadService, build_scope
+
+WRITE_HEADERS = {"X-KB-User": "alice", "X-KB-Write-Intent": "web-edit"}
+
+
+@pytest.fixture
+def roles_config() -> RolesConfig:
+    return RolesConfig(
+        roles={
+            "reader": ["read_published"],
+            "contributor": ["read_published", "propose_entry"],
+            "admin": ["*"],
+        },
+        users={"alice": "contributor", "reader": "reader", "admin": "admin"},
+    )
 
 
 def test_search_uses_human_index_and_excludes_research(tmp_path: Path) -> None:
@@ -131,7 +149,7 @@ def test_categories_and_browse_only_use_published_entries(tmp_path: Path) -> Non
 def test_http_surface_is_get_only_and_search_params_are_validated(tmp_path: Path) -> None:
     client = TestClient(create_app(kb_root=tmp_path / "kb"))
 
-    assert client.post("/api/entries", json={}).status_code == 405
+    assert client.post("/api/entries", json={}).status_code == 403
     assert client.put("/api/entries/KB-2026-0001", json={}).status_code == 405
     assert client.post("/api/research", json={}).status_code == 404
     assert client.post("/api/review/KB-2026-0001/approve", json={}).status_code == 404
@@ -268,6 +286,291 @@ def test_categories_source_error_response_does_not_leak_paths(
     assert leaked_path not in response.text
 
 
+def test_web_propose_entry_runs_all_pipeline_steps(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    calls: list[int] = []
+
+    def step(number: int) -> Callable[[MiddlewareContext], MiddlewareResult]:
+        def _step(context: MiddlewareContext) -> MiddlewareResult:
+            calls.append(number)
+            next_context = context.copy()
+            if number == 6:
+                next_context["allocated_id"] = "KB-2026-0001"
+                next_context["target_dir"] = "staging"
+                next_context["review_level"] = "heavy"
+            return ok(next_context)
+
+        return _step
+
+    client = TestClient(
+        create_app(
+            repo_root=tmp_path,
+            kb_root=tmp_path / "kb",
+            roles_config=roles_config,
+            pipeline_steps=(step(1), step(2), step(3), step(4), step(5), step(6), step(7)),
+        )
+    )
+
+    response = client.post("/api/entries", json=_web_create_payload(), headers=WRITE_HEADERS)
+
+    assert response.status_code == 201
+    assert calls == [1, 2, 3, 4, 5, 6, 7]
+    assert response.json()["proposed_id"] == "KB-2026-0001"
+    assert response.json()["status"] == "pending"
+
+
+def test_web_propose_entry_persists_to_staging_and_audit(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    client = TestClient(
+        create_app(
+            repo_root=tmp_path,
+            kb_root=kb_root,
+            roles_config=roles_config,
+            id_allocator=IDAllocator(kb_root / "indexes" / "ids.sqlite"),
+        )
+    )
+
+    response = client.post("/api/entries", json=_web_create_payload(), headers=WRITE_HEADERS)
+
+    assert response.status_code == 201
+    assert response.json()["ok"] is True
+    assert response.json()["proposed_id"] == "KB-2026-0001"
+    assert response.json()["status"] == "pending"
+    assert response.json()["target_dir"] == "staging"
+    assert (kb_root / "staging" / "KB-2026-0001.md").is_file()
+    assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
+    assert (kb_root / "indexes" / "audit.jsonl").is_file()
+
+
+def test_web_propose_update_persists_to_staging_and_keeps_published_entry(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"body": entry_payload(entry_id=None)["body"].replace("content.", "updated.")},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["status"] == "pending"
+    assert response.json()["review_level"] == "heavy"
+    assert (kb_root / "staging" / "KB-2026-0001.md").is_file()
+    assert (kb_root / "entries" / "KB-2026-0001.md").is_file()
+    staged = Entry.model_validate(WebReadService(kb_root).get_entry("KB-2026-0001"))
+    assert staged.trust_state == "published"
+
+
+def test_web_writes_fail_closed_without_auth_or_write_intent(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+    payload = _web_create_payload()
+
+    missing_all = client.post("/api/entries", json=payload)
+    missing_intent = client.post("/api/entries", json=payload, headers={"X-KB-User": "alice"})
+    missing_user = client.post(
+        "/api/entries",
+        json=payload,
+        headers={"X-KB-Write-Intent": "web-edit"},
+    )
+
+    assert missing_all.status_code == 403
+    assert missing_intent.status_code == 403
+    assert missing_user.status_code == 403
+
+
+def test_web_write_permissions_are_resolved_from_roles_config(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+    payload = _web_create_payload()
+
+    unknown = client.post(
+        "/api/entries",
+        json=payload,
+        headers={"X-KB-User": "mallory", "X-KB-Write-Intent": "web-edit"},
+    )
+    spoofed_reader = client.post(
+        "/api/entries",
+        json=payload,
+        headers={
+            "X-KB-User": "reader",
+            "X-KB-Role": "admin",
+            "X-KB-Write-Intent": "web-edit",
+        },
+    )
+
+    assert unknown.status_code == 403
+    assert unknown.json()["error"]["code"] == "E_PERM"
+    assert spoofed_reader.status_code == 403
+    assert spoofed_reader.json()["error"]["field"] == "auth.permissions"
+
+
+def test_web_create_rejects_self_declared_governance_fields(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+    base = _web_create_payload()
+
+    for field, value in {
+        "id": "KB-2026-9999",
+        "trust_state": "published",
+        "author_type": "agent",
+        "changed_fields": ["tags"],
+        "target_dir": "entries",
+        "role": "admin",
+    }.items():
+        response = client.post(
+            "/api/entries",
+            json={**base, field: value},
+            headers=WRITE_HEADERS,
+        )
+        assert response.status_code == 422
+
+
+def test_web_create_self_declared_claim_type_is_system_downgraded(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+    payload = _web_create_payload()
+    payload["credibility"] = {
+        "claim_type": "fact",
+        "support_strength": "strong",
+        "evidence": [{"type": "human_note", "excerpt": "Observed by reviewer."}],
+    }
+
+    response = client.post("/api/entries", json=payload, headers=WRITE_HEADERS)
+
+    assert response.status_code == 201
+    assert response.json()["ok"] is True
+    assert any(
+        warning["code"] == "W_DOWNGRADE" for warning in response.json()["validation_warnings"]
+    )
+    staged = read_entry(kb_root / "staging" / f"{response.json()['proposed_id']}.md")
+    assert staged.credibility.claim_type.value == "observation"
+
+
+def test_web_patch_rejects_self_declared_diff_and_state_fields(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    for field, value in {
+        "id": "KB-2026-9999",
+        "trust_state": "published",
+        "author_type": "agent",
+        "changed_fields": ["tags"],
+        "change_scopes": ["typo"],
+        "review_level": "auto",
+    }.items():
+        response = client.patch(
+            "/api/entries/KB-2026-0001",
+            json={"tags": ["safe"], field: value},
+            headers=WRITE_HEADERS,
+        )
+        assert response.status_code == 422
+
+
+def test_web_patch_rejects_traversal_and_missing_entries(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+
+    traversal = client.patch(
+        "/api/entries/%2E%2E%2Fresearch%2FKB-2026-0001",
+        json={"tags": ["safe"]},
+        headers=WRITE_HEADERS,
+    )
+    missing = client.patch(
+        "/api/entries/KB-2026-9999",
+        json={"tags": ["safe"]},
+        headers=WRITE_HEADERS,
+    )
+
+    assert traversal.status_code in {400, 404}
+    assert missing.status_code == 404
+
+
+def test_web_write_rejects_research_evidence(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+    payload = _web_create_payload()
+    payload["credibility"] = {
+        "claim_type": "observation",
+        "support_strength": "strong",
+        "evidence": [{"type": "spec", "uri": "research:R-2026-0001", "version": "v1"}],
+    }
+
+    response = client.post("/api/entries", json=payload, headers=WRITE_HEADERS)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "E_RESEARCH_AS_EVIDENCE"
+    assert not (tmp_path / "kb" / "staging").exists()
+
+
+def test_web_patch_refuses_to_overwrite_existing_pending_proposal(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"tags": ["safe"]},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "E_DUP"
+
+
 def _write_payload(path: Path, payload: dict[str, Any]) -> None:
     write_entry(path, Entry.model_validate(payload))
 
@@ -285,3 +588,10 @@ def _write_research(kb_root: Path, research_id: str, *, title: str) -> None:
             expires_at="2026-08-15T00:00:00+00:00",
         ),
     )
+
+
+def _web_create_payload() -> dict[str, Any]:
+    payload = entry_payload(entry_id=None, trust_state="pending")
+    for field in ("schema_version", "trust_state", "author_type", "created", "updated"):
+        payload.pop(field, None)
+    return payload

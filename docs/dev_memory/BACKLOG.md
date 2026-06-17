@@ -20,3 +20,13 @@
   complete JSON to the frontend and relies on the UI to hide internal fields;
   later phases should formalize §5.2 desensitization for fields such as
   `author`, `git_sha`, and other internal metadata.
+
+## Web Write Hardening
+
+- [ ] Replace P8 `X-KB-User` intranet trust header with real authentication
+  before broader rollout. The header is forgeable and only acceptable for the
+  current inner-network MVP boundary.
+- [ ] Replace P8 minimal write-intent header with a real CSRF/session/token
+  model when proper Web authentication is introduced.
+- [ ] Add a merge/replace flow for duplicate pending proposals. P8 currently
+  rejects a second pending edit for the same entry with `E_DUP`.
