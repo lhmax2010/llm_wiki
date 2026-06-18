@@ -2,8 +2,12 @@
 
 ## Current Status
 
-Implemented on branch `phase/7b-graph`; ready for three-way review plus Codex
-HTTP/graph smoke.
+Implemented on branch `phase/7b-graph`; PR #11 is ready to merge after
+four-way review.
+
+Four-way review (Claude + ChatGPT + Kimi + Codex HTTP/graph smoke) found no
+BLOCKER and no MAJOR issues. Related and graph attack-surface smoke tests did
+not find bypasses.
 
 Phase 7b adds related editing to the existing Web create/edit flow and adds a
 published-only graph view. The write side remains a thin extension of P8 Web
@@ -38,6 +42,9 @@ propose routes, and the read side remains a P7a/P4 published-entry view.
     /api/entries/{id}`.
 - Review prompt:
   - `docs/review/phase_7b_review_prompt.md`.
+- Review result:
+  - Four-way review complete; zero BLOCKER / zero MAJOR.
+  - No code changes required after review.
 
 ## Verification
 
@@ -76,9 +83,17 @@ propose routes, and the read side remains a P7a/P4 published-entry view.
 ## Remaining Risks / TODO
 
 - Large graph performance is not optimized in MVP. Add caching, centering, or
-  filtering if graph size grows.
+  filtering if graph size grows. This is merged into the broader P4/P7a
+  network read backlog: graph currently scans all published entries and
+  validates through Pydantic on request.
 - Related duplicate-edge normalization is not enforced at storage time. The
   graph response collapses reciprocal visual edges, but repeated stored human
   edges can still exist.
 - `X-KB-User` remains the P8 intranet MVP trust header. Real authentication is
   still required before broader exposure.
+- NIT: `RELATED_TARGET_DIRS` intentionally excludes `drafts/` and `research/`;
+  this matches the approved write-wide/read-published related strategy.
+- NIT: create-time self-related with the eventual allocated id is checked again
+  at persist-time validation after allocation. The earlier evidence validation
+  sees the provisional id, but the final persist validation is the enforceable
+  guard and is not exploitable.
