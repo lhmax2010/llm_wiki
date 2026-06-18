@@ -2,8 +2,7 @@
 
 ## Current Status
 
-Implemented on branch `phase/7b-graph`; PR #11 is ready to merge after
-four-way review.
+Merged via PR #11. Checkpoint tag: `checkpoint/phase_7b_graph`.
 
 Four-way review (Claude + ChatGPT + Kimi + Codex HTTP/graph smoke) found no
 BLOCKER and no MAJOR issues. Related and graph attack-surface smoke tests did
