@@ -11,6 +11,7 @@ from core.errors import IssueCode, ValidationIssue
 from core.models import (
     ClaimType,
     Credibility,
+    EdgeOrigin,
     Entry,
     EntryType,
     Evidence,
@@ -42,6 +43,7 @@ TRUST_STATE_BY_DIR = {
     "research": TrustState.RESEARCH,
     "deprecated": TrustState.DEPRECATED,
 }
+RELATED_TARGET_DIRS = ("entries", "staging", "deprecated")
 
 
 @dataclass(slots=True)
@@ -72,6 +74,7 @@ def validate_entry(
     _validate_body_skeleton(normalized, report)
     _validate_directory_state(normalized, entry_path, kb_root, report)
     _validate_code_binding(normalized, report)
+    _validate_related_edges(normalized, kb_root, report)
 
     normalized.credibility = _normalize_credibility(normalized.credibility, "credibility", report)
     for heading, section in normalized.section_credibility.items():
@@ -296,6 +299,93 @@ def _validate_code_binding(entry: Entry, report: ValidationReport) -> None:
                 "build_config_hash must be 16 lowercase hex characters",
             )
         )
+
+
+def _validate_related_edges(
+    entry: Entry,
+    kb_root: Path | None,
+    report: ValidationReport,
+) -> None:
+    if not entry.related:
+        return
+    if kb_root is None:
+        report.errors.append(
+            ValidationIssue(
+                IssueCode.E_SCHEMA,
+                "kb_root",
+                "kb_root is required when related targets are present",
+            )
+        )
+        return
+
+    for index, edge in enumerate(entry.related):
+        prefix = f"related[{index}]"
+        target = edge.target
+        if not target:
+            report.errors.append(
+                ValidationIssue(
+                    IssueCode.E_SCHEMA, f"{prefix}.target", "related target is required"
+                )
+            )
+            continue
+        if ID_PATTERN.fullmatch(target) is None:
+            report.errors.append(
+                ValidationIssue(
+                    IssueCode.E_SCHEMA,
+                    f"{prefix}.target",
+                    "related target must match KB-{year}-{NNNN}",
+                )
+            )
+            continue
+        if target == entry.id:
+            report.errors.append(
+                ValidationIssue(
+                    IssueCode.E_SCHEMA,
+                    f"{prefix}.target",
+                    "related target must not be the entry itself",
+                )
+            )
+            continue
+        if edge.origin is None:
+            edge.origin = EdgeOrigin.HUMAN
+        elif edge.origin != EdgeOrigin.HUMAN:
+            report.errors.append(
+                ValidationIssue(
+                    IssueCode.E_SCHEMA,
+                    f"{prefix}.origin",
+                    "related origin must be human in Phase 7b",
+                )
+            )
+        try:
+            target_exists = _related_target_exists(kb_root, target)
+        except ValueError as exc:
+            report.errors.append(ValidationIssue(IssueCode.E_SCHEMA, "kb_root", str(exc)))
+            continue
+        if not target_exists:
+            report.errors.append(
+                ValidationIssue(
+                    IssueCode.E_SCHEMA,
+                    f"{prefix}.target",
+                    "related target must exist in entries, staging, or deprecated",
+                )
+            )
+
+
+def _related_target_exists(kb_root: Path, entry_id: str) -> bool:
+    root = kb_root.resolve()
+    for dirname in RELATED_TARGET_DIRS:
+        source_path = root / dirname
+        if source_path.exists() and source_path.is_symlink():
+            raise ValueError(f"{dirname} directory must not be a symlink")
+        source_root = source_path.resolve()
+        if not _is_relative_to(source_root, root):
+            raise ValueError(f"{dirname} directory escapes kb root")
+        candidate = (source_root / f"{entry_id}.md").resolve()
+        if not _is_relative_to(candidate, source_root):
+            raise ValueError("related target path escapes source directory")
+        if candidate.is_file():
+            return True
+    return False
 
 
 def _section_effective_credibility(

@@ -30,10 +30,49 @@ const entry = {
   severity: null,
   section_credibility: {},
   code_binding: null,
-  related: [],
+  related: [{ target: "KB-2026-0002", type: "related", origin: "human", note: "seed pair" }],
   created: "2026-06-17T00:00:00Z",
   updated: "2026-06-17T00:00:00Z",
   author_type: "human"
+};
+
+const graph = {
+  nodes: [
+    {
+      id: "KB-2026-0001",
+      title: "8k photo defect",
+      entry_type: "defect_case",
+      module: "photo",
+      trust_state: "published",
+      claim_type: "observation",
+      support_strength: "moderate",
+      stale: false,
+      tags: ["photo"],
+      updated: "2026-06-17T00:00:00Z"
+    },
+    {
+      id: "KB-2026-0002",
+      title: "Related decoder note",
+      entry_type: "defect_case",
+      module: "decoder",
+      trust_state: "published",
+      claim_type: "observation",
+      support_strength: "strong",
+      stale: false,
+      tags: ["decoder"],
+      updated: "2026-06-17T00:00:00Z"
+    }
+  ],
+  edges: [
+    {
+      source: "KB-2026-0001",
+      target: "KB-2026-0002",
+      types: ["related"],
+      origins: ["human"],
+      notes: [],
+      bidirectional: true
+    }
+  ]
 };
 
 describe("App", () => {
@@ -79,6 +118,7 @@ describe("App", () => {
     await user.type(screen.getByLabelText("Title"), "New decoder note");
     await user.type(screen.getByLabelText("Module"), "decoder");
     await user.type(screen.getByLabelText("Tags"), "decoder, 8k");
+    await user.type(screen.getByLabelText("Related"), "KB-2026-0001 related seed-link");
     await user.type(screen.getByLabelText("Evidence"), "Observed by reviewer.");
     await user.type(screen.getByLabelText("Body"), "## symptom\nObserved body.");
     await user.click(screen.getByRole("button", { name: "Submit" }));
@@ -96,6 +136,14 @@ describe("App", () => {
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body.title).toBe("New decoder note");
       expect(body.tags).toEqual(["decoder", "8k"]);
+      expect(body.related).toEqual([
+        {
+          target: "KB-2026-0001",
+          type: "related",
+          origin: "human",
+          note: "seed-link"
+        }
+      ]);
       expect(body.id).toBeUndefined();
       expect(body.trust_state).toBeUndefined();
       expect(body.author_type).toBeUndefined();
@@ -125,6 +173,14 @@ describe("App", () => {
       });
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body.title).toBe("Updated 8k photo defect");
+      expect(body.related).toEqual([
+        {
+          target: "KB-2026-0002",
+          type: "related",
+          origin: "human",
+          note: "seed pair"
+        }
+      ]);
       expect(body.id).toBeUndefined();
       expect(body.trust_state).toBeUndefined();
       expect(body.changed_fields).toBeUndefined();
@@ -186,6 +242,22 @@ describe("App", () => {
       });
     });
   });
+
+  it("loads the published graph and opens a node detail", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Graph" }));
+
+    expect(await screen.findByLabelText("Knowledge graph")).toBeInTheDocument();
+    expect(screen.getByText("2 Nodes")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith("/api/graph");
+    await user.click(screen.getByLabelText("Open KB-2026-0001"));
+
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith("/api/entries/KB-2026-0001");
+    });
+  });
 });
 
 function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -231,6 +303,9 @@ function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
       validation_errors: [],
       validation_warnings: []
     });
+  }
+  if (url === "/api/graph") {
+    return ok(graph);
   }
   if (url === "/api/entries" && init?.method === "POST") {
     return ok({

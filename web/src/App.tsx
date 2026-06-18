@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import {
   approveReviewItem,
   getEntry,
+  getGraph,
   listCategories,
   listReviewQueue,
   proposeEntry,
@@ -13,6 +14,7 @@ import type {
   Categories,
   Entry,
   EntryWritePayload,
+  GraphResponse,
   ReviewQueue,
   ReviewResult,
   SearchResult,
@@ -29,6 +31,7 @@ type EditorState = {
   entryType: string;
   body: string;
   tags: string;
+  related: string;
   evidence: string;
 };
 
@@ -39,6 +42,7 @@ const EMPTY_EDITOR: EditorState = {
   entryType: "defect_case",
   body: "",
   tags: "",
+  related: "",
   evidence: ""
 };
 
@@ -56,6 +60,8 @@ function App() {
   const [showReviewQueue, setShowReviewQueue] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
+  const [graph, setGraph] = useState<GraphResponse | null>(null);
+  const [showGraph, setShowGraph] = useState(false);
 
   useEffect(() => {
     void listCategories()
@@ -100,6 +106,7 @@ function App() {
     setWriteResult(null);
     setReviewResult(null);
     setShowReviewQueue(false);
+    setShowGraph(false);
     setEditor(EMPTY_EDITOR);
   }
 
@@ -110,6 +117,7 @@ function App() {
     setWriteResult(null);
     setReviewResult(null);
     setShowReviewQueue(false);
+    setShowGraph(false);
     setEditor({
       mode: "edit",
       title: selected.title,
@@ -117,6 +125,7 @@ function App() {
       entryType: selected.entry_type,
       body: selected.body,
       tags: selected.tags.join(", "),
+      related: relatedText(selected),
       evidence: evidenceText(selected)
     });
   }
@@ -151,10 +160,32 @@ function App() {
       const queue = await listReviewQueue(writer.trim());
       setReviewQueue(queue);
       setShowReviewQueue(true);
+      setShowGraph(false);
       setEditor(null);
     } catch (exc) {
       setError(errorMessage(exc));
     }
+  }
+
+  async function loadGraph() {
+    setError(null);
+    setWriteResult(null);
+    setReviewResult(null);
+    try {
+      setGraph(await getGraph());
+      setShowGraph(true);
+      setShowReviewQueue(false);
+      setEditor(null);
+    } catch (exc) {
+      setError(errorMessage(exc));
+    }
+  }
+
+  async function openEntry(id: string) {
+    setShowGraph(false);
+    setShowReviewQueue(false);
+    setEditor(null);
+    await selectEntry(id);
   }
 
   async function decideReview(id: string, decision: "approve" | "reject") {
@@ -216,6 +247,9 @@ function App() {
           <button type="button" onClick={() => void loadReviewQueue()}>
             Review
           </button>
+          <button type="button" onClick={() => void loadGraph()}>
+            Graph
+          </button>
         </div>
 
         {error && <p className="error">{error}</p>}
@@ -229,7 +263,7 @@ function App() {
               className={selected?.id === result.id ? "result active" : "result"}
               key={result.id}
               type="button"
-              onClick={() => void selectEntry(result.id)}
+              onClick={() => void openEntry(result.id)}
             >
               <span className="result-title">{result.title}</span>
               <span className="result-meta">
@@ -252,6 +286,8 @@ function App() {
             setNote={setReviewNote}
             onDecision={(id, decision) => void decideReview(id, decision)}
           />
+        ) : showGraph && graph ? (
+          <GraphPanel graph={graph} onSelect={(id) => void openEntry(id)} />
         ) : selected ? (
           <EntryDetail entry={selected} />
         ) : (
@@ -317,6 +353,83 @@ function ReviewPanel({
   );
 }
 
+function GraphPanel({
+  graph,
+  onSelect
+}: {
+  graph: GraphResponse;
+  onSelect: (id: string) => void;
+}) {
+  const width = 920;
+  const height = 560;
+  const positions = graphPositions(graph.nodes, width, height);
+  return (
+    <section className="graph-panel" aria-label="Knowledge graph">
+      <div className="detail-header">
+        <div>
+          <span className="eyebrow">knowledge graph</span>
+          <h2>{graph.nodes.length} Nodes</h2>
+        </div>
+        <span className="status">{graph.edges.length} edges</span>
+      </div>
+
+      {graph.nodes.length === 0 ? (
+        <p className="muted">No published graph nodes.</p>
+      ) : (
+        <svg className="graph-canvas" viewBox={`0 0 ${width} ${height}`} role="img">
+          <title>Published KB related graph</title>
+          {graph.edges.map((edge) => {
+            const source = positions[edge.source];
+            const target = positions[edge.target];
+            if (!source || !target) {
+              return null;
+            }
+            const midX = (source.x + target.x) / 2;
+            const midY = (source.y + target.y) / 2;
+            return (
+              <g className="graph-edge" key={`${edge.source}-${edge.target}`}>
+                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} />
+                <text x={midX} y={midY - 8}>
+                  {edge.bidirectional ? "<-> " : ""}
+                  {edge.types.join(", ")}
+                </text>
+              </g>
+            );
+          })}
+          {graph.nodes.map((node) => {
+            const position = positions[node.id];
+            return (
+              <g
+                aria-label={`Open ${node.id}`}
+                className="graph-node"
+                key={node.id}
+                onClick={() => onSelect(node.id)}
+                role="button"
+                tabIndex={0}
+                transform={`translate(${position.x}, ${position.y})`}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelect(node.id);
+                  }
+                }}
+              >
+                <circle r="34" />
+                <text className="node-id" y="-4">
+                  {node.id.replace("KB-", "")}
+                </text>
+                <text className="node-title" y="14">
+                  {truncate(node.title, 18)}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      )}
+    </section>
+  );
+}
+
 function EntryEditor({
   editor,
   setEditor,
@@ -375,6 +488,15 @@ function EntryEditor({
           />
         </label>
       </div>
+
+      <label className="editor-block">
+        Related
+        <textarea
+          value={editor.related}
+          onChange={(event) => setEditor({ ...editor, related: event.target.value })}
+          placeholder="KB-2026-0002 related optional-note"
+        />
+      </label>
 
       <label className="editor-block">
         Evidence
@@ -503,6 +625,19 @@ function EntryDetail({ entry }: { entry: Entry }) {
         )}
       </section>
 
+      <section>
+        <h3>Related</h3>
+        {entry.related.length > 0 ? (
+          <ul className="evidence-list">
+            {entry.related.map((item, index) => (
+              <li key={index}>{relatedSummary(item)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No related entries.</p>
+        )}
+      </section>
+
       {stale && entry.code_binding?.stale_reason && (
         <section>
           <h3>Stale Reason</h3>
@@ -542,12 +677,41 @@ function editorPayload(editor: EditorState): EntryWritePayload {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean),
+    related: parseRelated(editor.related),
     credibility: {
       claim_type: "observation",
       support_strength: "strong",
       evidence: [{ type: "human_note", excerpt: editor.evidence }]
     }
   };
+}
+
+function parseRelated(value: string) {
+  return value
+    .replace(/,/g, "\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [target, type = "related", ...noteParts] = line.split(/\s+/);
+      return {
+        target,
+        type,
+        origin: "human",
+        note: noteParts.join(" ") || undefined
+      };
+    });
+}
+
+function relatedText(entry: Entry) {
+  return entry.related
+    .map((item) =>
+      [item.target, item.type ?? "related", item.note ?? ""]
+        .map((part) => String(part).trim())
+        .filter(Boolean)
+        .join(" ")
+    )
+    .join("\n");
 }
 
 function evidenceText(entry: Entry) {
@@ -558,10 +722,41 @@ function evidenceText(entry: Entry) {
   return String(evidence.excerpt ?? evidence.ref ?? evidence.uri ?? evidence.filepath ?? "");
 }
 
+function relatedSummary(item: { target?: string | null; type?: string | null; note?: string | null }) {
+  const type = item.type ?? "related";
+  const note = item.note ? ` / ${item.note}` : "";
+  return `${type}: ${item.target ?? "unknown"}${note}`;
+}
+
 function evidenceSummary(item: Record<string, unknown>) {
   const type = String(item.type ?? "evidence");
   const target = item.filepath ?? item.uri ?? item.ref ?? item.attachment_id ?? item.excerpt;
   return target ? `${type}: ${String(target)}` : type;
+}
+
+function graphPositions(nodes: GraphResponse["nodes"], width: number, height: number) {
+  const centerX = width / 2;
+  const centerY = height / 2;
+  if (nodes.length === 1) {
+    return { [nodes[0].id]: { x: centerX, y: centerY } };
+  }
+  const radius = Math.min(width, height) * 0.34;
+  return Object.fromEntries(
+    nodes.map((node, index) => {
+      const angle = (2 * Math.PI * index) / nodes.length - Math.PI / 2;
+      return [
+        node.id,
+        {
+          x: centerX + radius * Math.cos(angle),
+          y: centerY + radius * Math.sin(angle)
+        }
+      ];
+    })
+  );
+}
+
+function truncate(value: string, maxLength: number) {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
 }
 
 function errorMessage(exc: unknown) {

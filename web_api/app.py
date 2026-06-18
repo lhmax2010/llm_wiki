@@ -136,6 +136,12 @@ def create_app(
     ) -> dict[str, object]:
         return service.browse(module=module, entry_type=entry_type)
 
+    @app.get("/api/graph")
+    def graph(
+        service: Annotated[WebReadService, Depends(_service)],
+    ) -> dict[str, object]:
+        return service.graph()
+
     @app.post("/api/entries")
     def propose_entry(
         payload: WebEntryCreateRequest,

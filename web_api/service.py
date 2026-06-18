@@ -215,6 +215,51 @@ class WebReadService:
             ],
         }
 
+    def graph(self) -> dict[str, Any]:
+        entries = sorted(self._published_entries(), key=lambda item: item.id)
+        published_ids = {entry.id for entry in entries}
+        visual_edges: dict[tuple[str, str], dict[str, Any]] = {}
+
+        for entry in entries:
+            for related in entry.related:
+                target_id = related.target
+                if target_id is None or target_id == entry.id or target_id not in published_ids:
+                    continue
+                ordered_pair = sorted((entry.id, target_id))
+                pair = (ordered_pair[0], ordered_pair[1])
+                edge = visual_edges.setdefault(
+                    pair,
+                    {
+                        "source": entry.id,
+                        "target": target_id,
+                        "types": set(),
+                        "origins": set(),
+                        "notes": [],
+                        "_directions": set(),
+                    },
+                )
+                edge["types"].add(related.type.value if related.type is not None else "related")
+                edge["origins"].add(related.origin.value if related.origin is not None else "human")
+                if related.note:
+                    edge["notes"].append(related.note)
+                edge["_directions"].add((entry.id, target_id))
+
+        edges = []
+        for pair, edge in sorted(visual_edges.items()):
+            directions = edge.pop("_directions")
+            bidirectional = len(directions) > 1
+            if bidirectional:
+                edge["source"], edge["target"] = pair
+            edge["bidirectional"] = bidirectional
+            edge["types"] = sorted(edge["types"])
+            edge["origins"] = sorted(edge["origins"])
+            edges.append(edge)
+
+        return {
+            "nodes": [_graph_node(entry) for entry in entries],
+            "edges": edges,
+        }
+
     def _published_entries(self) -> list[Entry]:
         try:
             indexed, _ = read_valid_entries_from_source(
@@ -508,6 +553,13 @@ def _entry_summary(entry: Entry) -> dict[str, Any]:
         "support_strength": entry.credibility.support_strength.value,
         "stale": stale,
     }
+
+
+def _graph_node(entry: Entry) -> dict[str, Any]:
+    node = _entry_summary(entry)
+    node["tags"] = entry.tags
+    node["updated"] = entry.updated
+    return node
 
 
 def _write_result(
