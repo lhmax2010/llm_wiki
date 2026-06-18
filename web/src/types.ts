@@ -34,9 +34,16 @@ export type Entry = SearchResult & {
     stale_reason?: string | null;
     paths?: string[];
   } | null;
-  related: Array<Record<string, unknown>>;
+  related: RelatedEdge[];
   created: string;
   updated: string;
+};
+
+export type RelatedEdge = {
+  target: string;
+  type?: string | null;
+  origin?: string | null;
+  note?: string | null;
 };
 
 export type Categories = {
@@ -95,11 +102,39 @@ export type ReviewResult = {
   validation_warnings: WriteIssue[];
 };
 
+export type GraphNode = {
+  id: string;
+  title: string;
+  entry_type: string;
+  module: string;
+  trust_state: string;
+  claim_type: string;
+  support_strength: string;
+  stale?: boolean;
+  tags: string[];
+  updated: string;
+};
+
+export type GraphEdge = {
+  source: string;
+  target: string;
+  types: string[];
+  origins: string[];
+  notes: string[];
+  bidirectional: boolean;
+};
+
+export type GraphResponse = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+};
+
 export type EntryWritePayload = {
   entry_type: string;
   title: string;
   module: string;
   body: string;
   tags: string[];
+  related: RelatedEdge[];
   credibility: Credibility;
 };

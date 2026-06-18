@@ -2,6 +2,7 @@ import type {
   Categories,
   Entry,
   EntryWritePayload,
+  GraphResponse,
   ReviewQueue,
   ReviewResult,
   SearchResult,
@@ -40,6 +41,10 @@ export async function getEntry(id: string): Promise<Entry> {
 
 export async function listCategories(): Promise<Categories> {
   return readJson<Categories>(await fetch("/api/categories"));
+}
+
+export async function getGraph(): Promise<GraphResponse> {
+  return readJson<GraphResponse>(await fetch("/api/graph"));
 }
 
 export async function proposeEntry(payload: EntryWritePayload, user: string): Promise<WriteResult> {

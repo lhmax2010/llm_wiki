@@ -168,11 +168,57 @@ def test_categories_and_browse_only_use_published_entries(tmp_path: Path) -> Non
     assert [item["id"] for item in browse["entries"]] == ["KB-2026-0001"]
 
 
+def test_graph_only_uses_published_entries_and_published_edges(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    source = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    source["title"] = "Graph source"
+    source["related"] = [
+        {"target": "KB-2026-0002", "type": "related", "origin": "human"},
+        {"target": "KB-2026-0003", "type": "same_root_cause", "origin": "human"},
+        {"target": "KB-2026-0004", "type": "related", "origin": "human"},
+    ]
+    target = entry_payload(entry_id="KB-2026-0002", trust_state="published")
+    target["title"] = "Graph target"
+    target["related"] = [{"target": "KB-2026-0001", "type": "related", "origin": "human"}]
+    _write_payload(kb_root / "entries" / "KB-2026-0001.md", source)
+    _write_payload(kb_root / "entries" / "KB-2026-0002.md", target)
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0003.md",
+        entry_payload(entry_id="KB-2026-0003", trust_state="pending"),
+    )
+    _write_payload(
+        kb_root / "deprecated" / "KB-2026-0004.md",
+        entry_payload(entry_id="KB-2026-0004", trust_state="deprecated"),
+    )
+    _write_research(kb_root, "R-2026-0001", title="research graph secret")
+    client = TestClient(create_app(kb_root=kb_root))
+
+    response = client.get("/api/graph")
+
+    assert response.status_code == 200
+    graph = response.json()
+    assert [node["id"] for node in graph["nodes"]] == ["KB-2026-0001", "KB-2026-0002"]
+    assert graph["edges"] == [
+        {
+            "source": "KB-2026-0001",
+            "target": "KB-2026-0002",
+            "types": ["related"],
+            "origins": ["human"],
+            "notes": [],
+            "bidirectional": True,
+        }
+    ]
+    assert "KB-2026-0003" not in response.text
+    assert "KB-2026-0004" not in response.text
+    assert "research graph secret" not in response.text
+
+
 def test_http_surface_is_get_only_and_search_params_are_validated(tmp_path: Path) -> None:
     client = TestClient(create_app(kb_root=tmp_path / "kb"))
 
     assert client.post("/api/entries", json={}).status_code == 403
     assert client.put("/api/entries/KB-2026-0001", json={}).status_code == 405
+    assert client.post("/api/entries/KB-2026-0001/related", json={}).status_code == 404
     assert client.post("/api/research", json={}).status_code == 404
     assert client.put("/api/review/KB-2026-0001/approve", json={}).status_code == 405
     assert client.get("/api/entries", params={"status": "research"}).status_code == 422
@@ -367,6 +413,70 @@ def test_web_propose_entry_persists_to_staging_and_audit(
     assert (kb_root / "staging" / "KB-2026-0001.md").is_file()
     assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
     assert (kb_root / "indexes" / "audit.jsonl").is_file()
+
+
+def test_web_propose_entry_accepts_valid_related_through_pipeline(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+    payload = _web_create_payload()
+    payload["related"] = [{"target": "KB-2026-0001", "type": "related"}]
+
+    response = client.post("/api/entries", json=payload, headers=WRITE_HEADERS)
+
+    assert response.status_code == 201
+    assert response.json()["ok"] is True
+    staged = read_entry(kb_root / "staging" / f"{response.json()['proposed_id']}.md")
+    assert staged.related[0].target == "KB-2026-0001"
+    assert staged.related[0].origin == "human"
+
+
+@pytest.mark.parametrize("target", ["R-2026-0001", "KB-2026-9999"])
+def test_web_propose_entry_rejects_research_or_missing_related_targets(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+    target: str,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+    payload = _web_create_payload()
+    payload["related"] = [{"target": target, "type": "related"}]
+
+    response = client.post("/api/entries", json=payload, headers=WRITE_HEADERS)
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "E_SCHEMA"
+    assert "related[0].target" in response.json()["error"]["field"]
+    assert not (tmp_path / "kb" / "staging").exists()
+
+
+def test_web_patch_rejects_self_related_edge(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="published"),
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"related": [{"target": "KB-2026-0001", "type": "related"}]},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "E_SCHEMA"
+    assert "related[0].target" in response.json()["error"]["field"]
 
 
 def test_web_create_rebuilds_empty_allocator_before_issuing_id(

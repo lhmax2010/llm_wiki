@@ -586,6 +586,87 @@ def test_research_reference_cannot_be_formal_section_evidence(
     )
 
 
+def test_related_target_must_be_existing_kb_id_without_research_leak(
+    tmp_path: Path,
+    make_entry: Callable[..., Entry],
+) -> None:
+    kb_root = tmp_path / "kb"
+    (kb_root / "entries").mkdir(parents=True)
+    (kb_root / "entries" / "KB-2026-0002.md").write_text("placeholder\n", encoding="utf-8")
+    (kb_root / "research").mkdir()
+    (kb_root / "research" / "KB-2026-0003.md").write_text("research only\n", encoding="utf-8")
+
+    valid = _with_related(make_entry(), [{"target": "KB-2026-0002", "type": "related"}])
+    research_only = _with_related(make_entry(), [{"target": "KB-2026-0003", "type": "related"}])
+    malformed = _with_related(make_entry(), [{"target": "R-2026-0001", "type": "related"}])
+    missing = _with_related(make_entry(), [{"target": "KB-2026-9999", "type": "related"}])
+
+    valid_report = validate_entry(valid, kb_root=kb_root, check_evidence_exists=False)
+    research_report = validate_entry(research_only, kb_root=kb_root, check_evidence_exists=False)
+    malformed_report = validate_entry(malformed, kb_root=kb_root, check_evidence_exists=False)
+    missing_report = validate_entry(missing, kb_root=kb_root, check_evidence_exists=False)
+
+    assert valid_report.ok, valid_report.errors
+    assert valid_report.entry.related[0].origin == "human"
+    assert _has_issue(research_report.errors, IssueCode.E_SCHEMA, "related[0].target")
+    assert _has_issue(malformed_report.errors, IssueCode.E_SCHEMA, "related[0].target")
+    assert _has_issue(missing_report.errors, IssueCode.E_SCHEMA, "related[0].target")
+
+
+def test_related_allows_pending_and_deprecated_targets_but_rejects_self(
+    tmp_path: Path,
+    make_entry: Callable[..., Entry],
+) -> None:
+    kb_root = tmp_path / "kb"
+    for dirname, entry_id in (
+        ("staging", "KB-2026-0002"),
+        ("deprecated", "KB-2026-0003"),
+    ):
+        target_path = kb_root / dirname / f"{entry_id}.md"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("placeholder\n", encoding="utf-8")
+
+    pending = _with_related(make_entry(), [{"target": "KB-2026-0002", "type": "related"}])
+    deprecated = _with_related(make_entry(), [{"target": "KB-2026-0003", "type": "related"}])
+    self_related = _with_related(make_entry(), [{"target": "KB-2026-0001", "type": "related"}])
+
+    assert validate_entry(pending, kb_root=kb_root, check_evidence_exists=False).ok
+    assert validate_entry(deprecated, kb_root=kb_root, check_evidence_exists=False).ok
+    assert _has_issue(
+        validate_entry(self_related, kb_root=kb_root, check_evidence_exists=False).errors,
+        IssueCode.E_SCHEMA,
+        "related[0].target",
+    )
+
+
+def test_related_requires_kb_root_for_existence_checks(
+    make_entry: Callable[..., Entry],
+) -> None:
+    entry = _with_related(make_entry(), [{"target": "KB-2026-0002", "type": "related"}])
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    assert _has_issue(report.errors, IssueCode.E_SCHEMA, "kb_root")
+
+
+def test_related_origin_is_human_only_for_phase_7b(
+    tmp_path: Path,
+    make_entry: Callable[..., Entry],
+) -> None:
+    kb_root = tmp_path / "kb"
+    target_path = kb_root / "entries" / "KB-2026-0002.md"
+    target_path.parent.mkdir(parents=True)
+    target_path.write_text("placeholder\n", encoding="utf-8")
+    entry = _with_related(
+        make_entry(),
+        [{"target": "KB-2026-0002", "type": "related", "origin": "llm_suggested"}],
+    )
+
+    report = validate_entry(entry, kb_root=kb_root, check_evidence_exists=False)
+
+    assert _has_issue(report.errors, IssueCode.E_SCHEMA, "related[0].origin")
+
+
 def test_bare_log_does_not_keep_fact_claim(make_entry: Callable[..., Entry]) -> None:
     entry = make_entry(claim_type="fact", evidence=[{"type": "log"}])
 
@@ -594,6 +675,12 @@ def test_bare_log_does_not_keep_fact_claim(make_entry: Callable[..., Entry]) -> 
     assert report.entry.credibility.claim_type == "llm_hypothesis"
     assert _has_issue(report.warnings, IssueCode.W_DOWNGRADE, "credibility.claim_type")
     assert _has_issue(report.errors, IssueCode.E_SCHEMA, "credibility.evidence[0]")
+
+
+def _with_related(entry: Entry, related: list[dict[str, object]]) -> Entry:
+    payload = entry.model_dump(mode="json")
+    payload["related"] = related
+    return Entry.model_validate(payload)
 
 
 def _git(args: list[str], cwd: Path) -> None:

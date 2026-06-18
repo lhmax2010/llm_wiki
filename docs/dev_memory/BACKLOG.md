@@ -12,10 +12,12 @@
 
 ## Web Readonly Hardening
 
-- [ ] Add cache/rate-limit controls for network read endpoints. P7a keeps the
-  P4 thousand-entry MVP behavior, but exposing all-request scans through HTTP
-  can amplify P4 M1 performance risk. Add caching and request throttling before
-  broader intranet rollout.
+- [ ] Add cache/rate-limit controls or stronger index-side filtering for
+  network read endpoints. P7a search and P7b graph both inherit the P4 M1
+  behavior where indexes are mainly path catalogs and requests may fan out into
+  full published-entry scans plus Pydantic validation. This is acceptable for
+  the current small intranet KB, but broader rollout should either move more
+  filtering into the P4 index or add edge caching and request throttling.
 - [ ] Add human-view redaction policy for full `get_entry` JSON. P7a returns
   complete JSON to the frontend and relies on the UI to hide internal fields;
   later phases should formalize §5.2 desensitization for fields such as
