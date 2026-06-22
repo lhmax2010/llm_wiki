@@ -138,11 +138,10 @@ function App() {
     setError(null);
     setWriteResult(null);
     try {
-      const payload = editorPayload(editor);
       const result =
         editor.mode === "new"
-          ? await proposeEntry(payload, writer.trim())
-          : await proposeUpdate(selected?.id ?? "", payload, writer.trim());
+          ? await proposeEntry(createPayload(editor), writer.trim())
+          : await proposeUpdate(selected?.id ?? "", updatePayload(editor), writer.trim());
       setWriteResult(result);
       if (result.ok) {
         setEditor(null);
@@ -667,9 +666,19 @@ function TokenList({ values }: { values: string[] }) {
   );
 }
 
-function editorPayload(editor: EditorState): EntryWritePayload {
+function createPayload(editor: EditorState): EntryWritePayload {
   return {
-    entry_type: editor.entryType,
+    ...sharedEditorPayload(editor),
+    entry_type: editor.entryType
+  };
+}
+
+function updatePayload(editor: EditorState): Partial<EntryWritePayload> {
+  return sharedEditorPayload(editor);
+}
+
+function sharedEditorPayload(editor: EditorState): Omit<EntryWritePayload, "entry_type"> {
+  return {
     title: editor.title,
     module: editor.module,
     body: editor.body,

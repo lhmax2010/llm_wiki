@@ -134,3 +134,15 @@ R14 TODO:
 - Concurrent PATCH TOCTOU: P8 checks for existing pending proposals before write, but there is no per-entry Web edit lock yet.
 - IDAllocator singleton/lifecycle: P8 rebuilds before Web create, but allocator lifetime is still per app/service construction.
 - Trust-state placeholder wording: update payload is built from a published entry before `review_route` changes it to pending; add clearer comments if this confuses future maintainers.
+
+## Post-Merge Runtime Finding
+
+- 2026-06-22: real Web edit use found `422 Unprocessable Entity` on entry edit.
+  Root cause: the frontend reused the create payload for PATCH and sent
+  `entry_type`, while `WebEntryPatchRequest` is strict (`extra=forbid`) and
+  intentionally does not accept immutable create-only fields. Fix: split
+  frontend payload construction into `createPayload()` (includes `entry_type`)
+  and `updatePayload()` (omits `entry_type`), with a regression test asserting
+  edit PATCH bodies do not include `entry_type`. This was an integration gap:
+  review covered DTO/handler behavior, but not the normal browser edit submit
+  path end to end.

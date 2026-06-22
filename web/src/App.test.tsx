@@ -173,6 +173,7 @@ describe("App", () => {
       });
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body.title).toBe("Updated 8k photo defect");
+      expect(body.entry_type).toBeUndefined();
       expect(body.related).toEqual([
         {
           target: "KB-2026-0002",
