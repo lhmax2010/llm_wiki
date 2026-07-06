@@ -54,3 +54,14 @@
 ## 下一阶段计划
 
 - Phase 6：research 隔离与 promote flow。
+
+## 2026-07-06 Post-Merge Fix Prepared: PR #12
+
+- Fix scope: P5 review lifecycle only. `propose_update` reject now mirrors P8 approve republish semantics without deprecating the existing published entry.
+- Root cause: approve republish had a dedicated update mode, while reject update proposals still followed the net-new reject path and collided with the existing published terminal entry.
+- Outcome: update reject appends `review_reject_update`, deletes only the staging proposal, keeps `entries/{id}.md` unchanged, and does not create `deprecated/{id}.md`.
+- Verification:
+  - `uv run pytest` -> `222 passed, 1 warning`
+  - `uv run pytest tests/review/test_service.py --no-cov` -> `26 passed`
+  - Frontend: `npm run lint`, `npm run test`, and `npm run build` passed
+  - Codex smoke confirmed net-new reject, update reject, deprecated same-id `E_DUP`, and approve republish regression safety
