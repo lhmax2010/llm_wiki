@@ -214,9 +214,12 @@ def _review_transition(
     if review_level not in VALID_QUEUE_LEVELS:
         review_level = "heavy"
         review_metadata = ReviewMetadata(review_level, review_metadata.operation)
-    allow_republish = (
-        decision == "approve" and target_dir == "entries" and _is_update_proposal(review_metadata)
+    is_update_proposal = _is_update_proposal(review_metadata)
+    allow_republish = decision == "approve" and target_dir == "entries" and is_update_proposal
+    reject_update_proposal = (
+        decision == "reject" and target_dir == "deprecated" and is_update_proposal
     )
+    allow_existing_published = allow_republish or reject_update_proposal
     permission_error = _review_permission_error(
         roles_config,
         reviewer,
@@ -235,7 +238,7 @@ def _review_transition(
         terminal_path = _terminal_entry_path(
             kb_root,
             entry_id,
-            allow_published_entry=allow_republish,
+            allow_published_entry=allow_existing_published,
         )
     except ValueError as exc:
         return _failed("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
@@ -264,6 +267,7 @@ def _review_transition(
             note=note,
             review_level=review_level,
             allow_republish=allow_republish,
+            reject_update_proposal=reject_update_proposal,
             resolved_audit_path=resolved_audit_path,
         )
     finally:
@@ -283,13 +287,14 @@ def _locked_review_transition(
     note: str | None,
     review_level: ReviewLevel,
     allow_republish: bool,
+    reject_update_proposal: bool,
     resolved_audit_path: Path,
 ) -> ReviewOperationResult:
     try:
         terminal_path = _terminal_entry_path(
             kb_root,
             entry_id,
-            allow_published_entry=allow_republish,
+            allow_published_entry=allow_republish or reject_update_proposal,
         )
     except ValueError as exc:
         return _failed("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
@@ -308,6 +313,73 @@ def _locked_review_transition(
     if loaded is None:
         return _failed("E_SCHEMA", "staging entry not found or invalid", "entry_id")
     source_entry, source_path = loaded
+
+    if reject_update_proposal:
+        published = _load_entry_for_state(
+            kb_root=kb_root,
+            repo_root=repo_root,
+            source_dir="entries",
+            entry_id=entry_id,
+            expected_state=TrustState.PUBLISHED,
+            validation_mode="state_only",
+        )
+        if published is None:
+            return _failed(
+                "E_SCHEMA",
+                "published target is required for update reject",
+                "target_path",
+            )
+        published_entry, published_path = published
+        record = _build_review_audit_record(
+            kb_root=kb_root,
+            path=source_path,
+            reviewer=reviewer,
+            role=roles_config.permissions_for_user(reviewer)[0],
+            decision=decision,
+            entry_id=entry_id,
+            target_dir="staging",
+            review_level=review_level,
+            note=note,
+            operation="review_reject_update",
+        )
+        try:
+            append_audit_record(resolved_audit_path, record)
+        except OSError as exc:
+            return _failed("E_SCHEMA", f"audit append failed: {exc}", "audit_path")
+
+        try:
+            source_path.unlink()
+        except OSError as exc:
+            LOGGER.error(
+                "review source cleanup failed: %s (%s) - duplicate staging residue remains",
+                source_path,
+                exc,
+            )
+            warning = ApiError(
+                "E_SCHEMA",
+                f"review source cleanup failed: {exc}",
+                "staging_residue",
+            )
+            return ReviewOperationResult(
+                ok=True,
+                error=None,
+                warning=warning,
+                entry=published_entry,
+                review_level=review_level,
+                source_path=source_path,
+                target_path=published_path,
+                audit_record=record,
+            )
+
+        return ReviewOperationResult(
+            ok=True,
+            error=None,
+            entry=published_entry,
+            review_level=review_level,
+            source_path=source_path,
+            target_path=published_path,
+            audit_record=record,
+        )
 
     target_path = _target_path(kb_root, target_dir, entry_id)
     previous_target: Entry | None = None
@@ -589,7 +661,7 @@ def _build_review_audit_record(
     role: str,
     decision: ReviewDecision,
     entry_id: str,
-    target_dir: Literal["entries", "deprecated"],
+    target_dir: Literal["entries", "deprecated", "staging"],
     review_level: ReviewLevel,
     note: str | None,
     operation: str | None = None,
