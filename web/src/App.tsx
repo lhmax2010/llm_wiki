@@ -45,10 +45,12 @@ const EMPTY_EDITOR: EditorState = {
   related: "",
   evidence: ""
 };
+const SEARCH_PAGE_SIZE = 100;
 
 function App() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [hasMoreResults, setHasMoreResults] = useState(false);
   const [selected, setSelected] = useState<Entry | null>(null);
   const [categories, setCategories] = useState<Categories | null>(null);
   const [loading, setLoading] = useState(false);
@@ -74,13 +76,29 @@ function App() {
     setLoading(true);
     setError(null);
     try {
-      const nextResults = await searchEntries(nextQuery);
-      setResults(nextResults);
-      if (nextResults.length > 0) {
-        await selectEntry(nextResults[0].id);
+      const response = await searchEntries(nextQuery, SEARCH_PAGE_SIZE, 0);
+      setResults(response.entries);
+      setHasMoreResults(response.hasMore);
+      if (response.entries.length > 0) {
+        await selectEntry(response.entries[0].id);
       } else {
         setSelected(null);
       }
+    } catch (exc) {
+      setError(errorMessage(exc));
+      setHasMoreResults(false);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadMoreResults() {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await searchEntries(query, SEARCH_PAGE_SIZE, results.length);
+      setResults((current) => [...current, ...response.entries]);
+      setHasMoreResults(response.hasMore);
     } catch (exc) {
       setError(errorMessage(exc));
     } finally {
@@ -271,6 +289,16 @@ function App() {
               <span className="result-snippet">{result.snippet}</span>
             </button>
           ))}
+          {hasMoreResults && (
+            <button
+              className="load-more"
+              type="button"
+              disabled={loading}
+              onClick={() => void loadMoreResults()}
+            >
+              {loading ? "Loading..." : "Load more"}
+            </button>
+          )}
           {!loading && results.length === 0 && <p className="muted">No entries found.</p>}
         </div>
       </section>

@@ -17,6 +17,11 @@ export type SearchResult = {
   score?: number;
 };
 
+export type SearchEntriesResponse = {
+  entries: SearchResult[];
+  hasMore: boolean;
+};
+
 export type Entry = SearchResult & {
   schema_version: number;
   body: string;

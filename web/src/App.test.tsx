@@ -105,7 +105,22 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     await waitFor(() => {
-      expect(fetch).toHaveBeenCalledWith("/api/entries?q=8k");
+      expect(fetch).toHaveBeenCalledWith("/api/entries?q=8k&limit=100&offset=0");
+    });
+  });
+
+  it("loads additional search result pages", async () => {
+    const user = userEvent.setup();
+    fetchMock().mockImplementation(mockManyEntriesFetch);
+    render(<App />);
+
+    expect(await screen.findByText("Paged result 001")).toBeInTheDocument();
+    expect(screen.queryByText("Paged result 101")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+
+    expect(await screen.findByText("Paged result 101")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetch).toHaveBeenCalledWith("/api/entries?limit=100&offset=100");
     });
   });
 
@@ -342,9 +357,36 @@ function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     return ok({ entry });
   }
   if (url.startsWith("/api/entries")) {
-    return ok({ entries: [entry] });
+    return ok({ entries: [entry], has_more: false });
   }
   return Promise.resolve(new Response("not found", { status: 404 }));
+}
+
+function mockManyEntriesFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = String(input);
+  if (url === "/api/entries?limit=100&offset=0") {
+    return ok({
+      entries: Array.from({ length: 100 }, (_, index) => searchResult(index + 1)),
+      has_more: true
+    });
+  }
+  if (url === "/api/entries?limit=100&offset=100") {
+    return ok({
+      entries: [searchResult(101)],
+      has_more: false
+    });
+  }
+  return mockFetch(input, init);
+}
+
+function searchResult(number: number) {
+  const id = `KB-2026-${String(number).padStart(4, "0")}`;
+  return {
+    ...entry,
+    id,
+    title: `Paged result ${String(number).padStart(3, "0")}`,
+    snippet: `Paged snippet ${number}`
+  };
 }
 
 function ok(payload: unknown): Promise<Response> {

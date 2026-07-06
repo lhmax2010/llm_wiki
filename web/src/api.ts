@@ -5,6 +5,7 @@ import type {
   GraphResponse,
   ReviewQueue,
   ReviewResult,
+  SearchEntriesResponse,
   SearchResult,
   WriteResult
 } from "./types";
@@ -23,15 +24,24 @@ async function readJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function searchEntries(query: string): Promise<SearchResult[]> {
+export async function searchEntries(
+  query: string,
+  limit = 100,
+  offset = 0
+): Promise<SearchEntriesResponse> {
   const params = new URLSearchParams();
   if (query.trim()) {
     params.set("q", query.trim());
   }
-  const payload = await readJson<{ entries: SearchResult[] }>(
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  const payload = await readJson<{ entries: SearchResult[]; has_more: boolean }>(
     await fetch(`/api/entries?${params.toString()}`)
   );
-  return payload.entries;
+  return {
+    entries: payload.entries,
+    hasMore: payload.has_more
+  };
 }
 
 export async function getEntry(id: string): Promise<Entry> {

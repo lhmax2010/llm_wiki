@@ -74,6 +74,26 @@ def test_search_uses_human_index_and_excludes_research(tmp_path: Path) -> None:
     assert visible.json()["entries"][0]["trust_state"] == "published"
     assert hidden.status_code == 200
     assert hidden.json()["entries"] == []
+    assert hidden.json()["has_more"] is False
+
+
+def test_search_entries_reports_has_more_for_pagination(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    for number in range(1, 4):
+        payload = entry_payload(entry_id=f"KB-2026-{number:04d}", trust_state="published")
+        payload["title"] = f"Paginated case {number}"
+        _write_payload(kb_root / "entries" / f"KB-2026-{number:04d}.md", payload)
+    client = TestClient(create_app(kb_root=kb_root))
+
+    first_page = client.get("/api/entries", params={"q": "Paginated", "limit": 2, "offset": 0})
+    second_page = client.get("/api/entries", params={"q": "Paginated", "limit": 2, "offset": 2})
+
+    assert first_page.status_code == 200
+    assert len(first_page.json()["entries"]) == 2
+    assert first_page.json()["has_more"] is True
+    assert second_page.status_code == 200
+    assert len(second_page.json()["entries"]) == 1
+    assert second_page.json()["has_more"] is False
 
 
 def test_search_fallback_is_entries_only_when_index_is_unavailable(tmp_path: Path) -> None:

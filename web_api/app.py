@@ -104,15 +104,17 @@ def create_app(
             exclude_stale=exclude_stale,
             status=status,
         )
+        entries = service.search_entries(
+            q,
+            scope=scope,
+            expand_synonyms=expand_synonyms,
+            limit=limit + 1,
+            offset=offset,
+            sort=sort,
+        )
         return {
-            "entries": service.search_entries(
-                q,
-                scope=scope,
-                expand_synonyms=expand_synonyms,
-                limit=limit,
-                offset=offset,
-                sort=sort,
-            )
+            "entries": entries[:limit],
+            "has_more": len(entries) > limit,
         }
 
     @app.get("/api/entries/{entry_id}")

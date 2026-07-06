@@ -29,6 +29,8 @@ textarea {
 }
 
 .search-pane {
+  height: 100vh;
+  overflow-y: auto;
   border-right: 1px solid #d8dee8;
   background: #ffffff;
   padding: 24px;
@@ -322,6 +324,20 @@ h3 {
   text-align: left;
 }
 
+.load-more {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.load-more:disabled {
+  color: #64748b;
+}
+
 .result.active,
 .result:focus-visible {
   border-color: #1d4ed8;
@@ -446,6 +462,8 @@ h3 {
   }
 
   .search-pane {
+    height: auto;
+    overflow-y: visible;
     border-right: 0;
     border-bottom: 1px solid #d8dee8;
   }
