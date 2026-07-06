@@ -42,6 +42,10 @@
 
 ## Web Review Hardening
 
+- [ ] For future proposal subtypes, add paired approve/reject lifecycle tests
+  when the subtype is introduced. PR #12 fixed the P8 approve-republish
+  counterpart that was missing for update reject; new review modes should keep
+  both directions symmetric from day one.
 - [ ] Review P4/P5 SQLite connection lifecycle and standardize `closing()` usage
   where needed. Phase 8b review noted ResourceWarning risk in inherited index /
   review paths, but it is not specific to the Web review wrapper.

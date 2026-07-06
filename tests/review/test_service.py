@@ -17,7 +17,7 @@ from review.service import (
     list_review_queue,
     reject_staging_entry,
 )
-from tests.governed_api.helpers import entry_payload
+from tests.governed_api.helpers import body_for, entry_payload
 
 
 @pytest.fixture
@@ -574,6 +574,97 @@ def test_reject_can_dispose_entry_with_invalid_body(
     assert read_entry(kb_root / "deprecated" / "KB-2026-0001.md").trust_state == "deprecated"
 
 
+def test_reject_update_proposal_keeps_published_and_discards_staging(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    code_binding = {"repo_id": "local", "git_sha": "abc123", "paths": ["logs/baseline.txt"]}
+    existing = _write_entry(
+        kb_root,
+        "entries",
+        "KB-2026-0001",
+        trust_state="published",
+        entry_type="log_baseline",
+        code_binding=code_binding,
+    )
+    updated_body = body_for("log_baseline").replace("content.", "updated proposal.")
+    _write_entry(
+        kb_root,
+        "staging",
+        "KB-2026-0001",
+        trust_state="pending",
+        entry_type="log_baseline",
+        body=updated_body,
+        code_binding=code_binding,
+    )
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="light",
+        operation="propose_update",
+    )
+
+    result = reject_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="light",
+        entry_id="KB-2026-0001",
+        note="keep current published baseline",
+    )
+
+    assert result.ok, result.error
+    assert result.entry is not None
+    assert result.entry.trust_state == "published"
+    assert result.target_path == kb_root / "entries" / "KB-2026-0001.md"
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").body == existing.body
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+    assert not (kb_root / "deprecated" / "KB-2026-0001.md").exists()
+    audit = _last_audit(kb_root)
+    assert audit["operation"] == "review_reject_update"
+    assert audit["decision"] == "reject"
+    assert audit["target_dir"] == "staging"
+    assert audit["path"] == "staging/KB-2026-0001.md"
+    assert audit["note"] == "keep current published baseline"
+
+
+def test_reject_update_audit_failure_keeps_staging_and_published(
+    tmp_path: Path, review_roles: RolesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kb_root = tmp_path / "kb"
+    existing = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "rejected update.")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending", body=updated_body)
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    def fail_append(*args: object, **kwargs: object) -> None:
+        raise OSError("audit blocked")
+
+    monkeypatch.setattr("review.service.append_audit_record", fail_append)
+
+    result = reject_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert not result.ok
+    assert result.error is not None
+    assert result.error.field == "audit_path"
+    assert (kb_root / "staging" / "KB-2026-0001.md").exists()
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").body == existing.body
+    assert not (kb_root / "deprecated" / "KB-2026-0001.md").exists()
+
+
 def test_audit_append_failure_rolls_back_target_and_keeps_staging(
     tmp_path: Path, review_roles: RolesConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -694,17 +785,22 @@ def _write_entry(
     entry_id: str,
     *,
     trust_state: str,
+    entry_type: str = "defect_case",
     claim_type: str = "observation",
     evidence: list[dict[str, object]] | None = None,
     body: str | None = None,
+    code_binding: dict[str, object] | None = None,
 ) -> Entry:
     payload = entry_payload(
         entry_id=entry_id,
         trust_state=trust_state,
         claim_type=claim_type,
         evidence=evidence,
-        body=body,
+        body=body if body is not None else body_for(entry_type),
     )
+    payload["entry_type"] = entry_type
+    if code_binding is not None:
+        payload["code_binding"] = code_binding
     entry = Entry.model_validate(payload)
     write_entry(kb_root / directory / f"{entry_id}.md", entry)
     return entry

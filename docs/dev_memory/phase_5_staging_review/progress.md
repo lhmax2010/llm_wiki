@@ -101,3 +101,11 @@
   - 测试：`test_entry_id_validation_uses_fullmatch`。
 
 - TODO：`review_level` 权威源当前来自可变 audit 日志，内网信任模型下暂不阻塞，但它既可篡改也不适合作为长期高性能查询源。后续应通过 R1 设计变更，把 review routing metadata 持久化到受校验的 frontmatter 或独立 SQLite review state 表。
+
+## 2026-07-06 - PR #12 P5 Reject Update Proposal Fix
+
+- Root cause: P8 added approve republish for update proposals, but the symmetric reject path still used the net-new reject semantics. An update proposal already has `entries/{id}.md`, so reject hit the terminal-entry guard and surfaced as "review entry is not available" through Web review. The reported `log_baseline` type was incidental; the bug affected any `propose_update` rejection.
+- Fix: reuse the existing audit-derived `_is_update_proposal()` classification. For `decision=reject` + `operation=propose_update`, allow the existing published entry during terminal checks, load the published entry for the response, append audit with `operation=review_reject_update`, then delete only the staging proposal. The branch does not write `deprecated/` and does not modify `entries/{id}.md`.
+- Safety invariants retained: net-new reject still writes to `deprecated/`; deprecated same-id still returns `E_DUP`; per-entry lock, symlink/path checks, id validation, RBAC, and audit preflight remain in the P5 service path. Audit failure keeps staging in place so an update proposal is not silently lost.
+- Regression coverage: update reject preserves published + deletes staging + writes `review_reject_update`; update reject audit failure preserves staging; net-new reject remains unchanged; approve republish remains unchanged; Web reject update no longer returns "review entry is not available".
+- Codex smoke results: net-new reject created deprecated; update reject preserved published and removed staging; deprecated same-id remained `E_DUP`; P5 review suite passed `26 passed`; full suite passed `222 passed`.

@@ -891,6 +891,43 @@ def test_web_review_approve_republishes_update_proposal(
     assert _last_audit(kb_root)["operation"] == "review_republish"
 
 
+def test_web_review_reject_discards_update_proposal_without_deprecating_published(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    original = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    _write_payload(kb_root / "entries" / "KB-2026-0001.md", original)
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "rejected update.")
+    _write_payload(
+        kb_root / "staging" / "KB-2026-0001.md",
+        entry_payload(entry_id="KB-2026-0001", trust_state="pending", body=updated_body),
+    )
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.post(
+        "/api/review/KB-2026-0001/reject",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert response.json()["status"] == "published"
+    assert "review entry is not available" not in response.text
+    assert read_entry(kb_root / "entries" / "KB-2026-0001.md").body == original["body"]
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+    assert not (kb_root / "deprecated" / "KB-2026-0001.md").exists()
+    assert _last_audit(kb_root)["operation"] == "review_reject_update"
+
+
 def test_web_review_preserves_p5_terminal_and_audit_rollback_rules(
     tmp_path: Path,
     roles_config: RolesConfig,
