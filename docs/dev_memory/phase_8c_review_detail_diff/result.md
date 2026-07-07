@@ -1,6 +1,6 @@
 # Phase 8c - Web Review Detail + Diff / Result
 
-Status: ready for PR review.
+Status: completed; PR #13 R14 closed with no BLOCKER/MAJOR and one MINOR fixed.
 
 Risk: medium, leaning medium-high.
 
@@ -20,6 +20,10 @@ therefore stays reviewer-only and reuses P5 safe staging reads.
 - Web Review UI lets reviewers click queue items, inspect full content, and see
   update changed-field comparison before approve/reject.
 - Shared changed-field helper extracted for P2 middleware and review detail.
+- R14 FIX-1 filters system metadata noise from review detail diffs:
+  `trust_state`, `updated`, `author`, and `author_type` are aligned before
+  comparing current published vs proposal. User-editable fields such as `tags`
+  remain diff-visible.
 - No P5 transition behavior changed.
 
 ## Security / Governance Boundaries
@@ -33,6 +37,8 @@ therefore stays reviewer-only and reuses P5 safe staging reads.
   regular-file check, and `trust_state=pending` validation.
 - Research, drafts, deprecated, and arbitrary paths are not exposed.
 - Diff is system-computed; caller-supplied fields are ignored.
+- Review-detail `changed_fields` reflects user content changes, not lifecycle
+  metadata such as `updated`, `author`, or `author_type`.
 - Update proposal classification uses audit `operation=propose_update`, matching
   P8 republish and PR #12 reject-update.
 
@@ -52,6 +58,12 @@ Success: no issues found in 59 source files
 
 uv run pytest tests/review/test_service.py tests/web_api/test_app.py -q --no-cov
 72 passed, 1 warning
+
+uv run pytest tests/review/test_service.py::test_review_detail_update_diff_is_current_published_vs_staging tests/web_api/test_app.py::test_web_review_detail_update_diff_is_current_published_vs_staging -q --no-cov
+2 passed, 1 warning
+
+uv run pytest tests/governed_api/test_middleware.py -q --no-cov
+33 passed
 
 uv run pytest -q
 228 passed, 1 warning
@@ -78,6 +90,8 @@ vite build completed successfully
 - Confirm non-reviewers cannot read staging detail.
 - Confirm update diff is current published vs current proposal and does not use
   untrusted client/audit diff payload.
+- Confirm update diff excludes system fields (`trust_state`, `updated`,
+  `author`, `author_type`) while keeping user-editable fields such as `tags`.
 - Confirm P5 approve/reject/republish/reject-update transition behavior remains
   untouched.
 
@@ -86,3 +100,10 @@ vite build completed successfully
 - The UI shows field-level/body comparison, not a full line-by-line diff engine.
   This is intentional for Phase 8c and can be improved later if review volume
   warrants it.
+- Rename or split `_write_user`, carrying forward the P8b naming TODO for read
+  review endpoints that still use the write-user header dependency.
+- Rename `_require_queue_permission` to reflect that it now gates queue and
+  detail reads.
+- Encode review ids in `getReviewDetail()` before constructing the fetch URL.
+- Redact or avoid exposing the literal term `staging` in reviewer-facing Web
+  detail/path text if the surface becomes less internal.
