@@ -5,7 +5,7 @@
 ## Current
 
 - Active phase: `none`
-- Last merged phase: `phase_7b_graph`
+- Last merged phase: `phase_8c_review_detail_diff`
 - Last maintenance checkpoint: `checkpoint/p5-reject-update`
 
 ## Phases
@@ -23,6 +23,7 @@
 | phase_8 | web-edit | 已 Merge | `docs/dev_memory/phase_8_web_edit/` | https://github.com/lhmax2010/llm_wiki/pull/9 | 73e406e (merge), 2d2370f (PR head), 61155db (baseline) |
 | phase_8b | web-review | 已 Merge | `docs/dev_memory/phase_8b_web_review/` | https://github.com/lhmax2010/llm_wiki/pull/10 | ee05d58 (merge), 95f5f34 (PR head) |
 | phase_7b | graph-related | 已 Merge | `docs/dev_memory/phase_7b_graph/` | https://github.com/lhmax2010/llm_wiki/pull/11 | 8a22762 (merge), 0d0e4bc (PR head), 6a7675e (baseline) |
+| phase_8c | review-detail-diff | 已 Merge | `docs/dev_memory/phase_8c_review_detail_diff/` | https://github.com/lhmax2010/llm_wiki/pull/13 | 8ccf9d7 (merge), b4bfb02 (PR head), 8046a67 (FIX-1 code) |
 
 ## Maintenance Fixes
 
