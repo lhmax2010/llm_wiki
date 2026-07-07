@@ -178,6 +178,14 @@ def create_app(
     ) -> dict[str, object]:
         return service.review_queue_for_web(user=user)
 
+    @app.get("/api/review/{entry_id}")
+    def review_detail(
+        service: Annotated[WebReviewService, Depends(_review_service)],
+        user: Annotated[str, Depends(_write_user)],
+        entry_id: Annotated[str, PathParam(max_length=64)],
+    ) -> dict[str, object]:
+        return service.review_detail_for_web(entry_id, user=user)
+
     @app.post("/api/review/{entry_id}/approve")
     def approve_review_item(
         payload: WebReviewDecisionRequest,

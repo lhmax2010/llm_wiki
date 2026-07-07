@@ -40,6 +40,10 @@ export type Entry = SearchResult & {
     paths?: string[];
   } | null;
   related: RelatedEdge[];
+  source_refs: Array<Record<string, unknown>>;
+  author?: string | null;
+  author_type?: string | null;
+  reviewer?: string | null;
   created: string;
   updated: string;
 };
@@ -93,6 +97,18 @@ export type ReviewQueue = {
   backlog_count: number;
   backlog_warning: boolean;
   skipped_files: number;
+};
+
+export type ReviewDetail = {
+  entry_id: string;
+  operation: string;
+  review_level: string;
+  proposal: Entry;
+  proposal_path: string;
+  published: Entry | null;
+  published_path: string | null;
+  changed_fields: string[];
+  diff_available: boolean;
 };
 
 export type ReviewResult = {

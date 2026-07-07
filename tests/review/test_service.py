@@ -7,13 +7,14 @@ from pathlib import Path
 
 import pytest
 from governed_api.roles import RolesConfig
-from governed_api.types import AuditRecord, ReviewLevel
+from governed_api.types import ApiError, AuditRecord, ReviewLevel
 
-from core.models import Entry
+from core.models import AuthorType, Entry
 from core.storage import read_entry, write_entry
 from review.service import (
     BACKLOG_WARNING_THRESHOLD,
     approve_staging_entry,
+    get_review_detail,
     list_review_queue,
     reject_staging_entry,
 )
@@ -119,6 +120,96 @@ def test_review_queue_includes_update_proposal_with_published_target(tmp_path: P
     assert queue.backlog_count == 1
     assert queue.items[0].entry_id == "KB-2026-0001"
     assert queue.items[0].review_level == "heavy"
+
+
+def test_review_detail_returns_pending_proposal_without_published_diff(
+    tmp_path: Path,
+) -> None:
+    kb_root = tmp_path / "kb"
+    staging_entry = _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _append_audit(kb_root, staging_entry.id, target_dir="staging", review_level="light")
+
+    detail = get_review_detail(kb_root=kb_root, repo_root=tmp_path, entry_id=staging_entry.id)
+
+    assert not isinstance(detail, ApiError)
+    assert detail.entry_id == staging_entry.id
+    assert detail.review_level == "light"
+    assert detail.operation == "create"
+    assert detail.proposal.id == staging_entry.id
+    assert detail.proposal.trust_state == "pending"
+    assert detail.proposal_path == kb_root / "staging" / "KB-2026-0001.md"
+    assert detail.published is None
+    assert detail.changed_fields == ()
+    assert detail.diff_available is False
+
+
+def test_review_detail_update_diff_is_current_published_vs_staging(
+    tmp_path: Path,
+) -> None:
+    kb_root = tmp_path / "kb"
+    published = _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    proposal_body = entry_payload(entry_id=None)["body"].replace("content.", "proposal body.")
+    proposal = _write_entry(
+        kb_root,
+        "staging",
+        "KB-2026-0001",
+        trust_state="pending",
+        body=proposal_body,
+    )
+    proposal = proposal.model_copy(
+        update={
+            "updated": "2026-07-07T02:00:00Z",
+            "author": "alice",
+            "author_type": AuthorType.HUMAN,
+        }
+    )
+    write_entry(kb_root / "staging" / "KB-2026-0001.md", proposal)
+    current_published = published.model_copy(
+        update={
+            "body": "## symptom\ncurrent v2 body",
+            "updated": "2026-07-07T01:00:00Z",
+            "author": "bob",
+            "author_type": AuthorType.AGENT,
+        }
+    )
+    write_entry(kb_root / "entries" / "KB-2026-0001.md", current_published)
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+
+    detail = get_review_detail(kb_root=kb_root, repo_root=tmp_path, entry_id="KB-2026-0001")
+
+    assert not isinstance(detail, ApiError)
+    assert detail.operation == "propose_update"
+    assert detail.published is not None
+    assert detail.published.body == "## symptom\ncurrent v2 body"
+    assert detail.proposal.body == proposal.body
+    assert detail.diff_available is True
+    assert detail.changed_fields == ("body",)
+    assert "trust_state" not in detail.changed_fields
+    assert "updated" not in detail.changed_fields
+    assert "author" not in detail.changed_fields
+    assert "author_type" not in detail.changed_fields
+
+
+def test_review_detail_refuses_terminal_residue_and_invalid_id(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _write_entry(kb_root, "deprecated", "KB-2026-0001", trust_state="deprecated")
+
+    terminal = get_review_detail(kb_root=kb_root, repo_root=tmp_path, entry_id="KB-2026-0001")
+    invalid = get_review_detail(kb_root=kb_root, repo_root=tmp_path, entry_id="../research/x")
+
+    assert isinstance(terminal, ApiError)
+    assert terminal.code == "E_DUP"
+    assert terminal.field == "entry_id"
+    assert isinstance(invalid, ApiError)
+    assert invalid.code == "E_SCHEMA"
+    assert invalid.field == "entry_id"
 
 
 def test_review_queue_skips_when_any_terminal_state_exists(
@@ -578,7 +669,11 @@ def test_reject_update_proposal_keeps_published_and_discards_staging(
     tmp_path: Path, review_roles: RolesConfig
 ) -> None:
     kb_root = tmp_path / "kb"
-    code_binding = {"repo_id": "local", "git_sha": "abc123", "paths": ["logs/baseline.txt"]}
+    code_binding: dict[str, object] = {
+        "repo_id": "local",
+        "git_sha": "abc123",
+        "paths": ["logs/baseline.txt"],
+    }
     existing = _write_entry(
         kb_root,
         "entries",
