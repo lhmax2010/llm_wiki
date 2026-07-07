@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Literal
 
 from governed_api.audit import append_audit_record, preflight_audit_path
+from governed_api.diff import changed_fields_between
 from governed_api.roles import ADMIN_PERMISSION, RolesConfig
 from governed_api.types import ApiError, AuditRecord, ReviewLevel
 from pydantic import ValidationError
@@ -73,6 +74,19 @@ class ReviewOperationResult:
 class ReviewMetadata:
     review_level: ReviewLevel
     operation: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewDetail:
+    entry_id: str
+    review_level: ReviewLevel
+    operation: str | None
+    proposal: Entry
+    proposal_path: Path
+    published: Entry | None
+    published_path: Path | None
+    changed_fields: tuple[str, ...]
+    diff_available: bool
 
 
 def list_review_queue(
@@ -136,6 +150,88 @@ def list_review_queue(
         backlog_count=len(items),
         backlog_warning=len(items) > BACKLOG_WARNING_THRESHOLD,
         skipped_files=skipped,
+    )
+
+
+def get_review_detail(
+    *,
+    kb_root: Path,
+    repo_root: Path,
+    entry_id: str,
+    audit_path: Path | None = None,
+) -> ReviewDetail | ApiError:
+    """Return a pending staging proposal and current published diff metadata."""
+
+    if not _valid_entry_id(entry_id):
+        return ApiError("E_SCHEMA", "entry_id must match KB-{year}-{NNNN}", "entry_id")
+
+    resolved_audit_path = audit_path or _default_audit_path(kb_root)
+    review_metadata = _review_metadata_from_audit(resolved_audit_path).get(
+        entry_id, ReviewMetadata("heavy")
+    )
+    review_level = review_metadata.review_level
+    if review_level not in VALID_QUEUE_LEVELS:
+        review_level = "heavy"
+        review_metadata = ReviewMetadata(review_level, review_metadata.operation)
+    is_update_proposal = _is_update_proposal(review_metadata)
+
+    try:
+        terminal_path = _terminal_entry_path(
+            kb_root,
+            entry_id,
+            allow_published_entry=is_update_proposal,
+        )
+    except ValueError as exc:
+        return ApiError("E_SCHEMA", f"invalid terminal directory: {exc}", "kb_root")
+    if terminal_path is not None:
+        return ApiError("E_DUP", f"terminal entry already exists: {terminal_path}", "entry_id")
+
+    loaded = _load_entry_for_state(
+        kb_root=kb_root,
+        repo_root=repo_root,
+        source_dir="staging",
+        entry_id=entry_id,
+        expected_state=TrustState.PENDING,
+        validation_mode="no_evidence",
+    )
+    if loaded is None:
+        return ApiError("E_SCHEMA", "staging entry not found or invalid", "entry_id")
+    proposal, proposal_path = loaded
+
+    published: Entry | None = None
+    published_path: Path | None = None
+    changed_fields: tuple[str, ...] = ()
+    diff_available = False
+    if is_update_proposal:
+        published_loaded = _load_entry_for_state(
+            kb_root=kb_root,
+            repo_root=repo_root,
+            source_dir="entries",
+            entry_id=entry_id,
+            expected_state=TrustState.PUBLISHED,
+            validation_mode="state_only",
+        )
+        if published_loaded is None:
+            return ApiError(
+                "E_SCHEMA",
+                "published target is required for update detail",
+                "target_path",
+            )
+        published, published_path = published_loaded
+        proposal_for_diff = proposal.model_copy(update={"trust_state": published.trust_state})
+        changed_fields = tuple(sorted(changed_fields_between(published, proposal_for_diff)))
+        diff_available = True
+
+    return ReviewDetail(
+        entry_id=entry_id,
+        review_level=review_level,
+        operation=review_metadata.operation,
+        proposal=proposal,
+        proposal_path=proposal_path,
+        published=published,
+        published_path=published_path,
+        changed_fields=changed_fields,
+        diff_available=diff_available,
     )
 
 

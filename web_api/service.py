@@ -31,9 +31,11 @@ from index import IndexUnavailable, SearchService
 from index.sqlite_index import read_valid_entries_from_source, read_valid_entry_file
 from index.types import SearchResult, SearchScope
 from review.service import (
+    ReviewDetail,
     ReviewOperationResult,
     ReviewQueue,
     approve_staging_entry,
+    get_review_detail,
     list_review_queue,
     reject_staging_entry,
 )
@@ -425,6 +427,30 @@ class WebReviewService:
         )
         return _review_queue_to_dict(queue)
 
+    def review_detail_for_web(self, entry_id: str, *, user: str) -> dict[str, Any]:
+        self._require_queue_permission(user)
+        _validate_kb_id(entry_id)
+        detail = get_review_detail(
+            kb_root=self.kb_root,
+            repo_root=self.repo_root,
+            entry_id=entry_id,
+            audit_path=self.audit_path,
+        )
+        if isinstance(detail, ApiError):
+            issue = _review_api_error_to_issue(
+                detail,
+                decision="detail",
+                severity="error",
+            )
+            status_code = 404 if issue["field"] in {"entry_id", "target_path"} else 400
+            raise WebApiError(
+                issue["code"],
+                issue["message"],
+                issue["field"],
+                status_code,
+            )
+        return _review_detail_to_dict(detail)
+
     def approve_from_web(
         self,
         entry_id: str,
@@ -628,6 +654,25 @@ def _review_queue_to_dict(queue: ReviewQueue) -> dict[str, Any]:
         "backlog_warning": queue.backlog_warning,
         "skipped_files": queue.skipped_files,
     }
+
+
+def _review_detail_to_dict(detail: ReviewDetail) -> dict[str, Any]:
+    response: dict[str, Any] = {
+        "entry_id": detail.entry_id,
+        "operation": detail.operation or "unknown",
+        "review_level": detail.review_level,
+        "proposal": detail.proposal.model_dump(mode="json"),
+        "proposal_path": f"staging/{detail.proposal_path.name}",
+        "published": (
+            detail.published.model_dump(mode="json") if detail.published is not None else None
+        ),
+        "published_path": (
+            f"entries/{detail.published_path.name}" if detail.published_path is not None else None
+        ),
+        "changed_fields": list(detail.changed_fields),
+        "diff_available": detail.diff_available,
+    }
+    return response
 
 
 def _review_result_to_dict(

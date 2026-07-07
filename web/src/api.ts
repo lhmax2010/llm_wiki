@@ -3,6 +3,7 @@ import type {
   Entry,
   EntryWritePayload,
   GraphResponse,
+  ReviewDetail,
   ReviewQueue,
   ReviewResult,
   SearchEntriesResponse,
@@ -84,6 +85,14 @@ export async function proposeUpdate(
 export async function listReviewQueue(user: string): Promise<ReviewQueue> {
   return readJson<ReviewQueue>(
     await fetch("/api/review/queue", {
+      headers: userHeaders(user)
+    })
+  );
+}
+
+export async function getReviewDetail(id: string, user: string): Promise<ReviewDetail> {
+  return readJson<ReviewDetail>(
+    await fetch(`/api/review/${id}`, {
       headers: userHeaders(user)
     })
   );

@@ -31,9 +31,26 @@ const entry = {
   section_credibility: {},
   code_binding: null,
   related: [{ target: "KB-2026-0002", type: "related", origin: "human", note: "seed pair" }],
+  source_refs: [],
   created: "2026-06-17T00:00:00Z",
   updated: "2026-06-17T00:00:00Z",
   author_type: "human"
+};
+
+const pendingEntry = {
+  ...entry,
+  id: "KB-2026-0002",
+  title: "Pending runtime note",
+  module: "runtime",
+  trust_state: "pending",
+  body: "## symptom\npending reviewer-only body",
+  source_refs: [
+    {
+      type: "human_utterance",
+      role: "original_note",
+      text: "Original developer note"
+    }
+  ]
 };
 
 const graph = {
@@ -237,6 +254,29 @@ describe("App", () => {
     });
   });
 
+  it("opens review detail and displays system-computed update diff", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "reviewer");
+    await user.click(screen.getByRole("button", { name: "Review" }));
+    await user.click(await screen.findByRole("button", { name: /Pending runtime note/ }));
+
+    expect((await screen.findAllByText(/pending reviewer-only body/)).length).toBeGreaterThan(0);
+    expect(screen.getByText("human_utterance / original_note: Original developer note")).toBeInTheDocument();
+    expect(screen.getByText("Published Body")).toBeInTheDocument();
+    expect(screen.getByText("Proposal Body")).toBeInTheDocument();
+    expect(screen.getByText("body")).toBeInTheDocument();
+    await waitFor(() => {
+      const detailCall = fetchMock().mock.calls.find(
+        ([url]) => url === "/api/review/KB-2026-0002"
+      );
+      expect(detailCall?.[1]).toMatchObject({
+        headers: { "X-KB-User": "reviewer" }
+      });
+    });
+  });
+
   it("rejects a review item through the review API", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -296,6 +336,19 @@ function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
       backlog_count: 1,
       backlog_warning: false,
       skipped_files: 0
+    });
+  }
+  if (url === "/api/review/KB-2026-0002") {
+    return ok({
+      entry_id: "KB-2026-0002",
+      operation: "propose_update",
+      review_level: "heavy",
+      proposal: pendingEntry,
+      proposal_path: "staging/KB-2026-0002.md",
+      published: entry,
+      published_path: "entries/KB-2026-0002.md",
+      changed_fields: ["body", "source_refs"],
+      diff_available: true
     });
   }
   if (url === "/api/review/KB-2026-0002/approve" && init?.method === "POST") {

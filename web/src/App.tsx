@@ -3,6 +3,7 @@ import {
   approveReviewItem,
   getEntry,
   getGraph,
+  getReviewDetail,
   listCategories,
   listReviewQueue,
   proposeEntry,
@@ -15,6 +16,7 @@ import type {
   Entry,
   EntryWritePayload,
   GraphResponse,
+  ReviewDetail,
   ReviewQueue,
   ReviewResult,
   SearchResult,
@@ -59,6 +61,7 @@ function App() {
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
   const [reviewQueue, setReviewQueue] = useState<ReviewQueue | null>(null);
+  const [reviewDetail, setReviewDetail] = useState<ReviewDetail | null>(null);
   const [showReviewQueue, setShowReviewQueue] = useState(false);
   const [reviewNote, setReviewNote] = useState("");
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null);
@@ -124,6 +127,7 @@ function App() {
     setWriteResult(null);
     setReviewResult(null);
     setShowReviewQueue(false);
+    setReviewDetail(null);
     setShowGraph(false);
     setEditor(EMPTY_EDITOR);
   }
@@ -135,6 +139,7 @@ function App() {
     setWriteResult(null);
     setReviewResult(null);
     setShowReviewQueue(false);
+    setReviewDetail(null);
     setShowGraph(false);
     setEditor({
       mode: "edit",
@@ -176,6 +181,7 @@ function App() {
     try {
       const queue = await listReviewQueue(writer.trim());
       setReviewQueue(queue);
+      setReviewDetail(null);
       setShowReviewQueue(true);
       setShowGraph(false);
       setEditor(null);
@@ -188,6 +194,7 @@ function App() {
     setError(null);
     setWriteResult(null);
     setReviewResult(null);
+    setReviewDetail(null);
     try {
       setGraph(await getGraph());
       setShowGraph(true);
@@ -201,8 +208,18 @@ function App() {
   async function openEntry(id: string) {
     setShowGraph(false);
     setShowReviewQueue(false);
+    setReviewDetail(null);
     setEditor(null);
     await selectEntry(id);
+  }
+
+  async function loadReviewDetail(id: string) {
+    setError(null);
+    try {
+      setReviewDetail(await getReviewDetail(id, writer.trim()));
+    } catch (exc) {
+      setError(errorMessage(exc));
+    }
   }
 
   async function decideReview(id: string, decision: "approve" | "reject") {
@@ -216,6 +233,7 @@ function App() {
       setReviewResult(result);
       if (result.ok) {
         setReviewQueue(await listReviewQueue(writer.trim()));
+        setReviewDetail(null);
         await runSearch(query);
       }
     } catch (exc) {
@@ -311,6 +329,8 @@ function App() {
             queue={reviewQueue}
             note={reviewNote}
             setNote={setReviewNote}
+            detail={reviewDetail}
+            onSelect={(id) => void loadReviewDetail(id)}
             onDecision={(id, decision) => void decideReview(id, decision)}
           />
         ) : showGraph && graph ? (
@@ -329,11 +349,15 @@ function ReviewPanel({
   queue,
   note,
   setNote,
+  detail,
+  onSelect,
   onDecision
 }: {
   queue: ReviewQueue;
   note: string;
   setNote: (value: string) => void;
+  detail: ReviewDetail | null;
+  onSelect: (id: string) => void;
   onDecision: (id: string, decision: "approve" | "reject") => void;
 }) {
   return (
@@ -353,8 +377,15 @@ function ReviewPanel({
 
       <div className="review-list">
         {queue.items.map((item) => (
-          <article className="review-item" key={item.entry_id}>
-            <div>
+          <article
+            className={detail?.entry_id === item.entry_id ? "review-item active" : "review-item"}
+            key={item.entry_id}
+          >
+            <button
+              type="button"
+              className="review-summary"
+              onClick={() => onSelect(item.entry_id)}
+            >
               <span className="eyebrow">{item.entry_id}</span>
               <h3>{item.title}</h3>
               <p className="result-meta">
@@ -363,7 +394,7 @@ function ReviewPanel({
               <p className="result-snippet">
                 {item.claim_type} / {item.support_strength} / {item.path}
               </p>
-            </div>
+            </button>
             <div className="review-actions">
               <button type="button" onClick={() => onDecision(item.entry_id, "approve")}>
                 Approve
@@ -376,7 +407,117 @@ function ReviewPanel({
         ))}
         {queue.items.length === 0 && <p className="muted">No pending entries.</p>}
       </div>
+
+      {detail ? (
+        <ReviewDetailPanel detail={detail} />
+      ) : (
+        queue.items.length > 0 && <p className="muted">Select a pending item to inspect it.</p>
+      )}
     </section>
+  );
+}
+
+function ReviewDetailPanel({ detail }: { detail: ReviewDetail }) {
+  const proposal = detail.proposal;
+  return (
+    <section className="review-detail" aria-label="Review detail">
+      <div className="detail-header">
+        <div>
+          <span className="eyebrow">{detail.entry_id}</span>
+          <h2>{proposal.title}</h2>
+        </div>
+        <span className="status">{detail.operation}</span>
+      </div>
+
+      <dl className="facts">
+        <div>
+          <dt>Review</dt>
+          <dd>{detail.review_level}</dd>
+        </div>
+        <div>
+          <dt>State</dt>
+          <dd>{proposal.trust_state}</dd>
+        </div>
+        <div>
+          <dt>Module</dt>
+          <dd>{proposal.module}</dd>
+        </div>
+        <div>
+          <dt>Type</dt>
+          <dd>{proposal.entry_type}</dd>
+        </div>
+      </dl>
+
+      {detail.diff_available && detail.published ? (
+        <DiffPanel detail={detail} />
+      ) : (
+        <section>
+          <h3>Diff</h3>
+          <p className="muted">Net-new proposal. No published entry to compare.</p>
+        </section>
+      )}
+
+      <EntryDetail entry={proposal} />
+    </section>
+  );
+}
+
+function DiffPanel({ detail }: { detail: ReviewDetail }) {
+  const proposal = detail.proposal;
+  const published = detail.published;
+  if (!published) {
+    return null;
+  }
+  return (
+    <section>
+      <h3>Changed Fields</h3>
+      {detail.changed_fields.length > 0 ? (
+        <TokenList values={detail.changed_fields} />
+      ) : (
+        <p className="muted">No field differences from the current published entry.</p>
+      )}
+      <div className="diff-grid">
+        <DiffValue label="Title" before={published.title} after={proposal.title} />
+        <DiffValue label="Module" before={published.module} after={proposal.module} />
+        <DiffValue
+          label="Claim"
+          before={`${published.credibility.claim_type} / ${published.credibility.support_strength}`}
+          after={`${proposal.credibility.claim_type} / ${proposal.credibility.support_strength}`}
+        />
+        <DiffValue
+          label="Tags"
+          before={published.tags.join(", ")}
+          after={proposal.tags.join(", ")}
+        />
+      </div>
+      {detail.changed_fields.includes("body") && (
+        <div className="body-diff">
+          <div>
+            <h3>Published Body</h3>
+            <pre className="entry-body">{published.body}</pre>
+          </div>
+          <div>
+            <h3>Proposal Body</h3>
+            <pre className="entry-body">{proposal.body}</pre>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DiffValue({ label, before, after }: { label: string; before: string; after: string }) {
+  const changed = before !== after;
+  return (
+    <div className={changed ? "diff-value changed" : "diff-value"}>
+      <span className="eyebrow">{label}</span>
+      <p>
+        <strong>Published:</strong> {before || "OPEN"}
+      </p>
+      <p>
+        <strong>Proposal:</strong> {after || "OPEN"}
+      </p>
+    </div>
   );
 }
 
@@ -665,6 +806,41 @@ function EntryDetail({ entry }: { entry: Entry }) {
         )}
       </section>
 
+      <section>
+        <h3>Source Refs</h3>
+        {entry.source_refs.length > 0 ? (
+          <ul className="evidence-list">
+            {entry.source_refs.map((item, index) => (
+              <li key={index}>{sourceRefSummary(item)}</li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">No source refs.</p>
+        )}
+      </section>
+
+      <section>
+        <h3>Metadata</h3>
+        <dl className="facts compact">
+          <div>
+            <dt>Created</dt>
+            <dd>{entry.created}</dd>
+          </div>
+          <div>
+            <dt>Updated</dt>
+            <dd>{entry.updated}</dd>
+          </div>
+          <div>
+            <dt>Author</dt>
+            <dd>{entry.author ?? "OPEN"}</dd>
+          </div>
+          <div>
+            <dt>Reviewer</dt>
+            <dd>{entry.reviewer ?? "OPEN"}</dd>
+          </div>
+        </dl>
+      </section>
+
       {stale && entry.code_binding?.stale_reason && (
         <section>
           <h3>Stale Reason</h3>
@@ -769,6 +945,13 @@ function evidenceSummary(item: Record<string, unknown>) {
   const type = String(item.type ?? "evidence");
   const target = item.filepath ?? item.uri ?? item.ref ?? item.attachment_id ?? item.excerpt;
   return target ? `${type}: ${String(target)}` : type;
+}
+
+function sourceRefSummary(item: Record<string, unknown>) {
+  const type = String(item.type ?? "source");
+  const role = item.role ? ` / ${String(item.role)}` : "";
+  const target = item.text ?? item.attachment_id ?? item.content_hash ?? item.ref ?? item.uri;
+  return target ? `${type}${role}: ${String(target)}` : `${type}${role}`;
 }
 
 function graphPositions(nodes: GraphResponse["nodes"], width: number, height: number) {

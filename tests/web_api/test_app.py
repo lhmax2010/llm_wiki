@@ -796,6 +796,118 @@ def test_review_queue_requires_reviewer_permission(
     assert reviewer.json()["items"][0]["review_level"] == "heavy"
 
 
+def test_web_review_detail_requires_reviewer_and_returns_full_pending_content(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "entries" / "KB-2026-0002.md",
+        entry_payload(entry_id="KB-2026-0002", trust_state="published"),
+    )
+    payload = entry_payload(entry_id="KB-2026-0001", trust_state="pending")
+    payload["title"] = "Pending detail note"
+    payload["body"] = str(payload["body"]).replace("content.", "pending reviewer-only body.")
+    payload["related"] = [{"target": "KB-2026-0002", "type": "related", "origin": "human"}]
+    payload["source_refs"] = [
+        {
+            "type": "human_utterance",
+            "role": "original_note",
+            "text": "developer original note",
+        }
+    ]
+    _write_payload(kb_root / "staging" / "KB-2026-0001.md", payload)
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    missing_user = client.get("/api/review/KB-2026-0001")
+    contributor = client.get("/api/review/KB-2026-0001", headers={"X-KB-User": "alice"})
+    reader = client.get("/api/review/KB-2026-0001", headers={"X-KB-User": "reader"})
+    unknown = client.get("/api/review/KB-2026-0001", headers={"X-KB-User": "mallory"})
+    reviewer = client.get("/api/review/KB-2026-0001", headers={"X-KB-User": "reviewer"})
+
+    assert missing_user.status_code == 403
+    assert contributor.status_code == 403
+    assert reader.status_code == 403
+    assert unknown.status_code == 403
+    assert reviewer.status_code == 200
+    detail = reviewer.json()
+    assert detail["entry_id"] == "KB-2026-0001"
+    assert detail["operation"] == "propose_entry"
+    assert detail["review_level"] == "heavy"
+    assert "pending reviewer-only body" in detail["proposal"]["body"]
+    assert detail["proposal"]["source_refs"][0]["text"] == "developer original note"
+    assert detail["proposal"]["related"][0]["target"] == "KB-2026-0002"
+    assert detail["published"] is None
+    assert detail["changed_fields"] == []
+    assert detail["diff_available"] is False
+
+
+def test_web_review_detail_update_diff_is_current_published_vs_staging(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    published = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    published["body"] = str(published["body"]).replace("content.", "current published v2.")
+    _write_payload(kb_root / "entries" / "KB-2026-0001.md", published)
+    proposal = entry_payload(entry_id="KB-2026-0001", trust_state="pending")
+    proposal["body"] = str(proposal["body"]).replace("content.", "pending proposal body.")
+    proposal["title"] = "Pending title"
+    _write_payload(kb_root / "staging" / "KB-2026-0001.md", proposal)
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.get("/api/review/KB-2026-0001", headers={"X-KB-User": "reviewer"})
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["operation"] == "propose_update"
+    assert "current published v2" in detail["published"]["body"]
+    assert "pending proposal body" in detail["proposal"]["body"]
+    assert detail["diff_available"] is True
+    assert "body" in detail["changed_fields"]
+    assert "title" in detail["changed_fields"]
+    assert "trust_state" not in detail["changed_fields"]
+
+
+def test_web_review_detail_rejects_traversal_and_non_staging_sources(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_payload(
+        kb_root / "deprecated" / "KB-2026-0002.md",
+        entry_payload(entry_id="KB-2026-0002", trust_state="deprecated"),
+    )
+    _write_payload(
+        kb_root / "drafts" / "KB-2026-0003.md",
+        entry_payload(entry_id="KB-2026-0003", trust_state="draft"),
+    )
+    _write_research(kb_root, "R-2026-0001", title="review detail research secret")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    traversal = client.get(
+        "/api/review/%2E%2E%2Fresearch%2FR-2026-0001",
+        headers={"X-KB-User": "reviewer"},
+    )
+    deprecated = client.get("/api/review/KB-2026-0002", headers={"X-KB-User": "reviewer"})
+    draft = client.get("/api/review/KB-2026-0003", headers={"X-KB-User": "reviewer"})
+
+    assert traversal.status_code in {400, 404}
+    assert deprecated.status_code == 404
+    assert draft.status_code == 404
+    assert "review detail research secret" not in traversal.text
+    assert "review detail research secret" not in deprecated.text
+    assert "review detail research secret" not in draft.text
+
+
 def test_web_review_approve_delegates_to_p5_service(
     tmp_path: Path,
     roles_config: RolesConfig,

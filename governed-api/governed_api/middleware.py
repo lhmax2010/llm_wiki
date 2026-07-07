@@ -14,6 +14,7 @@ from core.models import Entry, TrustState
 from core.storage import write_entry
 from core.validation import ValidationReport, validate_entry
 from governed_api.audit import append_audit_record, build_audit_record, preflight_audit_path
+from governed_api.diff import changed_fields_between, normalized_entry_payload
 from governed_api.roles import RolesConfig
 from governed_api.types import (
     ApiError,
@@ -418,15 +419,8 @@ def _actual_changed_fields(context: MiddlewareContext) -> set[str]:
     entry = context.get("entry")
     if entry is None:
         return set()
-    new_payload = entry.model_dump(mode="json")
     previous_payload = _normalized_previous_payload(context)
-    if previous_payload is None:
-        return set()
-    return {
-        field
-        for field in set(previous_payload) | set(new_payload)
-        if previous_payload.get(field) != new_payload.get(field)
-    }
+    return changed_fields_between(previous_payload, entry)
 
 
 def _classify_actual_diff(context: MiddlewareContext) -> ReviewLevel:
@@ -515,14 +509,9 @@ def _old_new_mapping(
 def _normalized_previous_payload(context: MiddlewareContext) -> dict[str, Any] | None:
     previous_entry = context.get("previous_entry")
     if previous_entry is not None:
-        return previous_entry.model_dump(mode="json")
+        return normalized_entry_payload(previous_entry)
     previous_payload = context.get("previous_payload")
-    if previous_payload is None:
-        return None
-    try:
-        return Entry.model_validate(previous_payload).model_dump(mode="json")
-    except ValidationError:
-        return previous_payload
+    return normalized_entry_payload(previous_payload)
 
 
 def _as_mapping(value: object) -> dict[str, Any] | None:
