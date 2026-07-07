@@ -71,7 +71,29 @@ Notes:
 
 - The diff is relative to current published, not proposal-time published. This
   is intentional: reviewers need to know what approving now would change.
-- `trust_state` is normalized out of update diff comparison so lifecycle state
-  (`pending` vs `published`) does not appear as a content change.
+- `trust_state`, `updated`, `author`, and `author_type` are normalized out of
+  update diff comparison so lifecycle/system metadata does not appear as a
+  content change. User-editable fields such as `tags` remain part of the diff.
 - The endpoint is still an intranet/tooling endpoint that trusts `X-KB-User`,
   consistent with P8/P8b. It does not introduce real authentication.
+
+R14 follow-up:
+
+- FIX-1【MINOR】: Review detail update diffs no longer include system metadata
+  noise from `updated`, `author`, or `author_type`. The proposal side is aligned
+  with the current published entry before calling the shared diff helper, the
+  same way `trust_state` is aligned.
+- Tests now cover the previous blind spot where published/proposal metadata had
+  the same hard-coded timestamp. The service and HTTP diff tests set different
+  `updated`, `author`, and `author_type` values, change only `body`, and assert
+  `changed_fields == ["body"]` / `("body",)`.
+
+R14 TODO:
+
+- Rename or split `_write_user`, carrying forward the P8b naming TODO for read
+  review endpoints that still use the write-user header dependency.
+- Rename `_require_queue_permission` to reflect that the same permission gate
+  now covers queue and detail reads.
+- Encode review ids in `getReviewDetail()` before constructing the fetch URL.
+- Redact or avoid exposing the literal term `staging` in reviewer-facing Web
+  detail/path text if the surface becomes less internal.

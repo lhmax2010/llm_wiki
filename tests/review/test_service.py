@@ -9,7 +9,7 @@ import pytest
 from governed_api.roles import RolesConfig
 from governed_api.types import ApiError, AuditRecord, ReviewLevel
 
-from core.models import Entry
+from core.models import AuthorType, Entry
 from core.storage import read_entry, write_entry
 from review.service import (
     BACKLOG_WARNING_THRESHOLD,
@@ -156,7 +156,22 @@ def test_review_detail_update_diff_is_current_published_vs_staging(
         trust_state="pending",
         body=proposal_body,
     )
-    current_published = published.model_copy(update={"body": "## symptom\ncurrent v2 body"})
+    proposal = proposal.model_copy(
+        update={
+            "updated": "2026-07-07T02:00:00Z",
+            "author": "alice",
+            "author_type": AuthorType.HUMAN,
+        }
+    )
+    write_entry(kb_root / "staging" / "KB-2026-0001.md", proposal)
+    current_published = published.model_copy(
+        update={
+            "body": "## symptom\ncurrent v2 body",
+            "updated": "2026-07-07T01:00:00Z",
+            "author": "bob",
+            "author_type": AuthorType.AGENT,
+        }
+    )
     write_entry(kb_root / "entries" / "KB-2026-0001.md", current_published)
     _append_audit(
         kb_root,
@@ -174,8 +189,11 @@ def test_review_detail_update_diff_is_current_published_vs_staging(
     assert detail.published.body == "## symptom\ncurrent v2 body"
     assert detail.proposal.body == proposal.body
     assert detail.diff_available is True
-    assert "body" in detail.changed_fields
+    assert detail.changed_fields == ("body",)
     assert "trust_state" not in detail.changed_fields
+    assert "updated" not in detail.changed_fields
+    assert "author" not in detail.changed_fields
+    assert "author_type" not in detail.changed_fields
 
 
 def test_review_detail_refuses_terminal_residue_and_invalid_id(tmp_path: Path) -> None:

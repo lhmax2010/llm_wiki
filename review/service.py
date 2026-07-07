@@ -218,7 +218,14 @@ def get_review_detail(
                 "target_path",
             )
         published, published_path = published_loaded
-        proposal_for_diff = proposal.model_copy(update={"trust_state": published.trust_state})
+        proposal_for_diff = proposal.model_copy(
+            update={
+                "trust_state": published.trust_state,
+                "updated": published.updated,
+                "author": published.author,
+                "author_type": published.author_type,
+            }
+        )
         changed_fields = tuple(sorted(changed_fields_between(published, proposal_for_diff)))
         diff_available = True
 

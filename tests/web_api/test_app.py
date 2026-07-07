@@ -850,10 +850,15 @@ def test_web_review_detail_update_diff_is_current_published_vs_staging(
     kb_root = tmp_path / "kb"
     published = entry_payload(entry_id="KB-2026-0001", trust_state="published")
     published["body"] = str(published["body"]).replace("content.", "current published v2.")
+    published["updated"] = "2026-07-07T01:00:00Z"
+    published["author"] = "bob"
+    published["author_type"] = "agent"
     _write_payload(kb_root / "entries" / "KB-2026-0001.md", published)
     proposal = entry_payload(entry_id="KB-2026-0001", trust_state="pending")
     proposal["body"] = str(proposal["body"]).replace("content.", "pending proposal body.")
-    proposal["title"] = "Pending title"
+    proposal["updated"] = "2026-07-07T02:00:00Z"
+    proposal["author"] = "alice"
+    proposal["author_type"] = "human"
     _write_payload(kb_root / "staging" / "KB-2026-0001.md", proposal)
     _append_audit(
         kb_root,
@@ -872,9 +877,11 @@ def test_web_review_detail_update_diff_is_current_published_vs_staging(
     assert "current published v2" in detail["published"]["body"]
     assert "pending proposal body" in detail["proposal"]["body"]
     assert detail["diff_available"] is True
-    assert "body" in detail["changed_fields"]
-    assert "title" in detail["changed_fields"]
+    assert detail["changed_fields"] == ["body"]
     assert "trust_state" not in detail["changed_fields"]
+    assert "updated" not in detail["changed_fields"]
+    assert "author" not in detail["changed_fields"]
+    assert "author_type" not in detail["changed_fields"]
 
 
 def test_web_review_detail_rejects_traversal_and_non_staging_sources(
