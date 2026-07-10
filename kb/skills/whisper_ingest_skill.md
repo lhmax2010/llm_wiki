@@ -1,6 +1,6 @@
 # 经验白话沉淀 Skill（行为契约）
 
-面向 Cline / 接入统一知识库的对话式 agent。当开发人员用自然语言口述一段技术经验、排查结论或踩坑记录时，你负责把它整理成结构化 KB 候选条目，**先给开发人员确认，再**通过 MCP propose 提交，让 KB 的 P1-P5 治理裁决最终状态。
+面向接入统一知识库的对话式 agent（Cline / Codex / 其他）。当开发人员用自然语言口述一段技术经验、排查结论或踩坑记录时，你负责把它整理成结构化 KB 候选条目，**先给开发人员确认，再**通过 MCP propose 提交，让 KB 的 P1-P5 治理裁决最终状态。
 
 本 skill 只新增"白话理解 + 原话留底 + 起草后人确认"三个前置环节；**结构化格式、查重、证据驱动、propose 工具全部遵守 `kb/skills/ingest_skill.md`**，不重复定义、不绕过它。冲突时以 ingest_skill 为准。
 
@@ -28,10 +28,11 @@
     - type: human_utterance
       role: original_note
       text: "<开发人员的白话原文，原样保留>"
-      captured_by: cline
+      captured_by: <执行此 skill 的 agent id，如 cline / codex>
       captured_at: "<ISO 时间戳，如 2026-06-22T12:34:56+08:00>"
   ```
 - 原话是**出处 / provenance**，不放 evidence——所以不影响 `claim_type` 裁决（已验证：source_refs 不参与裁决）。
+- `captured_by` 记录实际执行沉淀的 agent，不要写死；例如 Cline 执行填 `cline`，Codex 执行填 `codex`。
 - 目的：结构化内容若有歧义，可回溯原话核对，防 LLM 曲解。
 - **原话过长时**（如超过几句话）：不要把长文塞进 frontmatter 的 `text`（会让条目变重）。改为把原话存成附件，`source_refs` 里放 `attachment_id` + `content_hash` 引用；或先存进 research 再引用其 id。短原话直接放 `text` 即可。
 
