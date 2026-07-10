@@ -135,3 +135,10 @@
   research; republish triggers both index refreshes; refresh failure keeps the
   published entry and returns warning; reject and reject-update do not refresh;
   temp-build failure preserves the previous SQLite index.
+- Review lesson: the first patch placed refresh in `_review_transition()`, which
+  looked correct in direct unit tests but did not cover the real Web
+  `WebReviewService.approve_from_web()` delegate path under review. The final
+  trigger lives in the public `approve_staging_entry()` entrypoint, after the
+  per-entry lock is released. A Web-level regression test now creates a stale
+  index first, approves through `POST /api/review/{id}/approve`, then verifies
+  immediate Web search visibility and research exclusion.
