@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from core.models import Entry, TrustState
 from core.storage import read_entry, write_entry
 from core.validation import ID_PATTERN, validate_entry
+from index import SearchService
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +34,9 @@ PUBLISH_PERMISSION = "publish_entry"
 DEPRECATE_PERMISSION = "deprecate_entry"
 VALID_QUEUE_LEVELS: set[ReviewLevel] = {"light", "heavy"}
 UPDATE_REVIEW_OPERATIONS = {"update", "propose_update"}
+INDEX_REFRESH_WARNING_MESSAGE = (
+    "entry published, but search index refresh failed; run index rebuild manually"
+)
 ReviewDecision = Literal["approve", "reject"]
 ValidationMode = Literal["full", "no_evidence", "state_only"]
 
@@ -252,7 +256,7 @@ def approve_staging_entry(
     note: str | None = None,
     audit_path: Path | None = None,
 ) -> ReviewOperationResult:
-    return _review_transition(
+    result = _review_transition(
         kb_root=kb_root,
         repo_root=repo_root,
         roles_config=roles_config,
@@ -265,6 +269,9 @@ def approve_staging_entry(
         note=note,
         audit_path=audit_path,
     )
+    if _should_refresh_review_indexes(result, decision="approve", target_dir="entries"):
+        result = _refresh_review_indexes(kb_root, result)
+    return result
 
 
 def reject_staging_entry(
@@ -834,6 +841,81 @@ def _review_metadata_from_audit(audit_path: Path) -> dict[str, ReviewMetadata]:
                 operation=operation if isinstance(operation, str) else None,
             )
     return metadata_by_id
+
+
+def _should_refresh_review_indexes(
+    result: ReviewOperationResult,
+    *,
+    decision: ReviewDecision,
+    target_dir: Literal["entries", "deprecated"],
+) -> bool:
+    return result.ok and decision == "approve" and target_dir == "entries"
+
+
+def _refresh_review_indexes(
+    kb_root: Path,
+    result: ReviewOperationResult,
+) -> ReviewOperationResult:
+    service = SearchService(kb_root)
+    failures: list[str] = []
+    for index_name, rebuild in (
+        ("human_search_index", service.rebuild_human_index),
+        ("agent_search_index", service.rebuild_agent_index),
+    ):
+        try:
+            build_result = rebuild()
+        except Exception as exc:
+            LOGGER.exception("review index refresh failed for %s: %s", index_name, exc)
+            failures.append(f"{index_name}: {exc}")
+            continue
+        LOGGER.info(
+            "review index refresh rebuilt %s: indexed=%s skipped=%s status=%s",
+            build_result.index_name,
+            build_result.indexed_entries,
+            build_result.skipped_files,
+            build_result.status,
+        )
+    if not failures:
+        return result
+
+    warning = _combine_warning(
+        result.warning,
+        ApiError(
+            "E_SCHEMA",
+            INDEX_REFRESH_WARNING_MESSAGE,
+            "search_index",
+            details={"failures": failures},
+        ),
+    )
+    return replace(result, warning=warning)
+
+
+def _combine_warning(existing: ApiError | None, new: ApiError) -> ApiError:
+    if existing is None:
+        return new
+    field: str | None
+    if existing.field and new.field:
+        field = f"{existing.field},{new.field}"
+    else:
+        field = existing.field or new.field
+    details: dict[str, object] = {"warnings": [_warning_details(existing), _warning_details(new)]}
+    return ApiError(
+        existing.code,
+        f"{existing.message}; {new.message}",
+        field,
+        details=details,
+    )
+
+
+def _warning_details(warning: ApiError) -> dict[str, object]:
+    details: dict[str, object] = {
+        "code": warning.code,
+        "message": warning.message,
+        "field": warning.field,
+    }
+    if warning.details is not None:
+        details["details"] = warning.details
+    return details
 
 
 def _rollback_target(path: Path, previous_entry: Entry | None = None) -> None:

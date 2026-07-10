@@ -11,8 +11,10 @@ from governed_api.types import ApiError, AuditRecord, ReviewLevel
 
 from core.models import AuthorType, Entry
 from core.storage import read_entry, write_entry
+from index import IndexBuildResult, SearchService
 from review.service import (
     BACKLOG_WARNING_THRESHOLD,
+    INDEX_REFRESH_WARNING_MESSAGE,
     approve_staging_entry,
     get_review_detail,
     list_review_queue,
@@ -276,6 +278,48 @@ def test_approve_publishes_with_same_id_updates_review_metadata_and_audits(
     assert audit["note"] == "content verified"
 
 
+def test_approve_refreshes_human_and_agent_indexes_without_research_leak(
+    tmp_path: Path, review_roles: RolesConfig
+) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    service.rebuild_human_index()
+    service.rebuild_agent_index()
+    _write_entry(
+        kb_root,
+        "research",
+        "KB-2026-0002",
+        trust_state="research",
+        title="research-only-refresh-token",
+    )
+    _write_entry(
+        kb_root,
+        "staging",
+        "KB-2026-0001",
+        trust_state="pending",
+        title="fresh-publish-refresh-token",
+    )
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert result.ok, result.error
+    assert [item["id"] for item in service.search_human("fresh-publish-refresh-token")] == [
+        "KB-2026-0001"
+    ]
+    assert [item["id"] for item in service.search_agent("fresh-publish-refresh-token")] == [
+        "KB-2026-0001"
+    ]
+    assert service.search_human("research-only-refresh-token") == []
+    assert all(not path.startswith("research/") for path in service.human_index.indexed_paths())
+
+
 def test_approve_republishes_update_proposal_and_audits(
     tmp_path: Path, review_roles: RolesConfig
 ) -> None:
@@ -314,6 +358,45 @@ def test_approve_republishes_update_proposal_and_audits(
     assert audit["target_dir"] == "entries"
     assert audit["review_level"] == "heavy"
     assert audit["note"] == "republish accepted"
+
+
+def test_republish_refreshes_human_and_agent_indexes(
+    tmp_path: Path, review_roles: RolesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "entries", "KB-2026-0001", trust_state="published")
+    updated_body = entry_payload(entry_id=None)["body"].replace("content.", "republished.")
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending", body=updated_body)
+    _append_audit(
+        kb_root,
+        "KB-2026-0001",
+        target_dir="staging",
+        review_level="heavy",
+        operation="propose_update",
+    )
+    calls: list[str] = []
+
+    def record_human(self: SearchService) -> IndexBuildResult:
+        calls.append("human")
+        return IndexBuildResult("human_search_index", 1, 0, "ready")
+
+    def record_agent(self: SearchService) -> IndexBuildResult:
+        calls.append("agent")
+        return IndexBuildResult("agent_search_index", 1, 0, "ready")
+
+    monkeypatch.setattr("review.service.SearchService.rebuild_human_index", record_human)
+    monkeypatch.setattr("review.service.SearchService.rebuild_agent_index", record_agent)
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert result.ok, result.error
+    assert calls == ["human", "agent"]
 
 
 def test_approve_net_new_still_rejects_existing_published_target(
@@ -376,11 +459,19 @@ def test_republish_still_rejects_deprecated_terminal_conflict(
 
 
 def test_reject_moves_to_deprecated_and_keeps_reject_audit(
-    tmp_path: Path, review_roles: RolesConfig
+    tmp_path: Path, review_roles: RolesConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     kb_root = tmp_path / "kb"
     entry = _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
     _append_audit(kb_root, entry.id, target_dir="staging", review_level="light")
+    monkeypatch.setattr(
+        "review.service.SearchService.rebuild_human_index",
+        lambda self: pytest.fail("reject must not refresh human index"),
+    )
+    monkeypatch.setattr(
+        "review.service.SearchService.rebuild_agent_index",
+        lambda self: pytest.fail("reject must not refresh agent index"),
+    )
 
     result = reject_staging_entry(
         kb_root=kb_root,
@@ -666,7 +757,7 @@ def test_reject_can_dispose_entry_with_invalid_body(
 
 
 def test_reject_update_proposal_keeps_published_and_discards_staging(
-    tmp_path: Path, review_roles: RolesConfig
+    tmp_path: Path, review_roles: RolesConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     kb_root = tmp_path / "kb"
     code_binding: dict[str, object] = {
@@ -699,6 +790,14 @@ def test_reject_update_proposal_keeps_published_and_discards_staging(
         review_level="light",
         operation="propose_update",
     )
+    monkeypatch.setattr(
+        "review.service.SearchService.rebuild_human_index",
+        lambda self: pytest.fail("reject update must not refresh human index"),
+    )
+    monkeypatch.setattr(
+        "review.service.SearchService.rebuild_agent_index",
+        lambda self: pytest.fail("reject update must not refresh agent index"),
+    )
 
     result = reject_staging_entry(
         kb_root=kb_root,
@@ -722,6 +821,44 @@ def test_reject_update_proposal_keeps_published_and_discards_staging(
     assert audit["target_dir"] == "staging"
     assert audit["path"] == "staging/KB-2026-0001.md"
     assert audit["note"] == "keep current published baseline"
+
+
+def test_index_refresh_failure_keeps_approved_entry_and_returns_warning(
+    tmp_path: Path,
+    review_roles: RolesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    kb_root = tmp_path / "kb"
+    _write_entry(kb_root, "staging", "KB-2026-0001", trust_state="pending")
+    _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
+
+    def fail_human(self: SearchService) -> IndexBuildResult:
+        raise OSError("index locked")
+
+    def rebuild_agent(self: SearchService) -> IndexBuildResult:
+        return IndexBuildResult("agent_search_index", 1, 0, "ready")
+
+    monkeypatch.setattr("review.service.SearchService.rebuild_human_index", fail_human)
+    monkeypatch.setattr("review.service.SearchService.rebuild_agent_index", rebuild_agent)
+    caplog.set_level(logging.ERROR, logger="review.service")
+
+    result = approve_staging_entry(
+        kb_root=kb_root,
+        repo_root=tmp_path,
+        roles_config=review_roles,
+        reviewer="reviewer",
+        entry_id="KB-2026-0001",
+    )
+
+    assert result.ok
+    assert result.error is None
+    assert result.warning is not None
+    assert result.warning.field == "search_index"
+    assert result.warning.message == INDEX_REFRESH_WARNING_MESSAGE
+    assert (kb_root / "entries" / "KB-2026-0001.md").exists()
+    assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
+    assert "review index refresh failed for human_search_index" in caplog.text
 
 
 def test_reject_update_audit_failure_keeps_staging_and_published(
@@ -885,6 +1022,7 @@ def _write_entry(
     evidence: list[dict[str, object]] | None = None,
     body: str | None = None,
     code_binding: dict[str, object] | None = None,
+    title: str | None = None,
 ) -> Entry:
     payload = entry_payload(
         entry_id=entry_id,
@@ -894,6 +1032,8 @@ def _write_entry(
         body=body if body is not None else body_for(entry_type),
     )
     payload["entry_type"] = entry_type
+    if title is not None:
+        payload["title"] = title
     if code_binding is not None:
         payload["code_binding"] = code_binding
     entry = Entry.model_validate(payload)

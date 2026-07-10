@@ -920,9 +920,17 @@ def test_web_review_approve_delegates_to_p5_service(
     roles_config: RolesConfig,
 ) -> None:
     kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    service.rebuild_human_index()
+    service.rebuild_agent_index()
+    research = entry_payload(entry_id="KB-2026-0002", trust_state="research")
+    research["title"] = "web-review-research-only-token"
+    _write_payload(kb_root / "research" / "KB-2026-0002.md", research)
+    proposal = entry_payload(entry_id="KB-2026-0001", trust_state="pending")
+    proposal["title"] = "web-approve-refresh-token"
     _write_payload(
         kb_root / "staging" / "KB-2026-0001.md",
-        entry_payload(entry_id="KB-2026-0001", trust_state="pending"),
+        proposal,
     )
     _append_audit(kb_root, "KB-2026-0001", target_dir="staging", review_level="heavy")
     client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
@@ -941,6 +949,15 @@ def test_web_review_approve_delegates_to_p5_service(
     assert not (kb_root / "staging" / "KB-2026-0001.md").exists()
     published = read_entry(kb_root / "entries" / "KB-2026-0001.md")
     assert published.reviewer == "reviewer"
+    visible = client.get("/api/entries", params={"q": "web-approve-refresh-token"})
+    hidden = client.get("/api/entries", params={"q": "web-review-research-only-token"})
+    assert visible.status_code == 200
+    assert [item["id"] for item in visible.json()["entries"]] == ["KB-2026-0001"]
+    assert hidden.status_code == 200
+    assert hidden.json()["entries"] == []
+    assert [item["id"] for item in service.search_agent("web-approve-refresh-token")] == [
+        "KB-2026-0001"
+    ]
     audit = _last_audit(kb_root)
     assert audit["operation"] == "review_approve"
     assert audit["reviewer"] == "reviewer"
