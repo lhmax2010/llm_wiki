@@ -109,3 +109,36 @@
 - Safety invariants retained: net-new reject still writes to `deprecated/`; deprecated same-id still returns `E_DUP`; per-entry lock, symlink/path checks, id validation, RBAC, and audit preflight remain in the P5 service path. Audit failure keeps staging in place so an update proposal is not silently lost.
 - Regression coverage: update reject preserves published + deletes staging + writes `review_reject_update`; update reject audit failure preserves staging; net-new reject remains unchanged; approve republish remains unchanged; Web reject update no longer returns "review entry is not available".
 - Codex smoke results: net-new reject created deprecated; update reject preserved published and removed staging; deprecated same-id remained `E_DUP`; P5 review suite passed `26 passed`; full suite passed `222 passed`.
+
+## 2026-07-10 - P5/P4 Publish Index Refresh Fix
+
+- Root cause: approve moved a reviewed entry from `staging/` into `entries/`,
+  but `human_search_index` / `agent_search_index` were not refreshed. Web and
+  MCP search use the SQLite path catalogs when present and only fallback when an
+  index is unavailable, so a valid-but-stale index could hide newly published
+  entries until a manual rebuild.
+- Fix: after a successful P5 approve into `entries/` and after the per-entry
+  review lock is released, the review service best-effort rebuilds both
+  `human_search_index` and `agent_search_index` via the existing P4
+  `SearchService` rebuild functions. Net-new reject and reject-update do not
+  refresh because both indexes currently source only `entries/`, not
+  `deprecated/`.
+- Failure semantics: index refresh failure does not roll back publish. The
+  result stays `ok=True` with a `search_index` warning telling operators to run
+  a manual rebuild; detailed failures are logged. This matches the existing P5
+  best-effort cleanup style.
+- P4 hardening: `SQLiteMetadataIndex.rebuild()` now writes a complete temporary
+  SQLite DB in the same directory and atomically replaces the old DB, so
+  concurrent full rebuilds cannot leave a half-written target index.
+- Regression coverage: net-new approve is immediately searchable through human
+  and agent indexes without manual rebuild; human index still excludes
+  research; republish triggers both index refreshes; refresh failure keeps the
+  published entry and returns warning; reject and reject-update do not refresh;
+  temp-build failure preserves the previous SQLite index.
+- Review lesson: the first patch placed refresh in `_review_transition()`, which
+  looked correct in direct unit tests but did not cover the real Web
+  `WebReviewService.approve_from_web()` delegate path under review. The final
+  trigger lives in the public `approve_staging_entry()` entrypoint, after the
+  per-entry lock is released. A Web-level regression test now creates a stale
+  index first, approves through `POST /api/review/{id}/approve`, then verifies
+  immediate Web search visibility and research exclusion.

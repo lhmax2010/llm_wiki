@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from contextlib import closing
+import uuid
+from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -69,24 +70,29 @@ class SQLiteMetadataIndex:
             entries.extend(source_entries)
             skipped += source_skipped
 
-        with closing(sqlite3.connect(self.db_path)) as connection:
-            _create_schema(connection)
-            connection.execute("DELETE FROM index_meta")
-            connection.execute("DELETE FROM entries")
-            connection.execute(
-                "INSERT INTO index_meta(name, status, indexed_at) VALUES (?, ?, ?)",
-                (self.name, "ready", datetime.now(UTC).isoformat()),
-            )
-            connection.executemany(
-                """
-                INSERT INTO entries(
-                    id, path, source_dir
+        temp_path = self.db_path.with_name(f".{self.db_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            with closing(sqlite3.connect(temp_path)) as connection:
+                _create_schema(connection)
+                connection.execute(
+                    "INSERT INTO index_meta(name, status, indexed_at) VALUES (?, ?, ?)",
+                    (self.name, "ready", datetime.now(UTC).isoformat()),
                 )
-                VALUES (?, ?, ?)
-                """,
-                [_row_for_entry(item, kb_root) for item in entries],
-            )
-            connection.commit()
+                connection.executemany(
+                    """
+                    INSERT INTO entries(
+                        id, path, source_dir
+                    )
+                    VALUES (?, ?, ?)
+                    """,
+                    [_row_for_entry(item, kb_root) for item in entries],
+                )
+                connection.commit()
+            temp_path.replace(self.db_path)
+        except Exception:
+            with suppress(FileNotFoundError):
+                temp_path.unlink()
+            raise
 
         return IndexBuildResult(
             index_name=self.name,

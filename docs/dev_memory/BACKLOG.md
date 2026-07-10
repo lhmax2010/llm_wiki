@@ -46,6 +46,13 @@
   when the subtype is introduced. PR #12 fixed the P8 approve-republish
   counterpart that was missing for update reject; new review modes should keep
   both directions symmetric from day one.
+- [ ] Add search-time stale index detection or fallback. The P5 review service
+  now refreshes human and agent search indexes after successful publish, but
+  query-time detection would still help recover from manually edited files,
+  copied KB data, or interrupted maintenance workflows.
+- [ ] Replace publish-time full index rebuild with an incremental update or
+  debounced background refresh once the KB grows. Full rebuild is acceptable for
+  the current intranet-scale dataset and keeps P4 source-dir isolation simple.
 - [ ] Review P4/P5 SQLite connection lifecycle and standardize `closing()` usage
   where needed. Phase 8b review noted ResourceWarning risk in inherited index /
   review paths, but it is not specific to the Web review wrapper.

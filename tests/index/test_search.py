@@ -32,6 +32,45 @@ def test_agent_index_rebuild_excludes_research_at_source(tmp_path: Path) -> None
     assert service.search_agent("research-only-token") == []
 
 
+def test_index_rebuild_keeps_previous_sqlite_when_temp_build_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    _write_payload(
+        kb_root,
+        "entries",
+        entry_payload(
+            entry_id="KB-2026-0001",
+            trust_state="published",
+            title="original-index-token",
+        ),
+    )
+    service.rebuild_human_index()
+    assert service.human_index.indexed_paths() == ["entries/KB-2026-0001.md"]
+
+    _write_payload(
+        kb_root,
+        "entries",
+        entry_payload(
+            entry_id="KB-2026-0002",
+            trust_state="published",
+            title="new-index-token",
+        ),
+    )
+
+    def fail_row(*args: object, **kwargs: object) -> tuple[str, str, str]:
+        raise RuntimeError("temp build failed")
+
+    monkeypatch.setattr("index.sqlite_index._row_for_entry", fail_row)
+
+    with pytest.raises(RuntimeError, match="temp build failed"):
+        service.rebuild_human_index()
+
+    assert service.human_index.indexed_paths() == ["entries/KB-2026-0001.md"]
+    assert [path.name for path in (kb_root / "indexes" / "human_search_index").glob("*.tmp")] == []
+
+
 def test_agent_index_rebuild_rejects_symlink_escape_to_research(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
