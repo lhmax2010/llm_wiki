@@ -184,6 +184,32 @@ h3 {
   gap: 18px;
 }
 
+.graph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.graph-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.graph-actions button {
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: #ffffff;
+  color: #1e3a8a;
+  font-weight: 700;
+}
+
 .graph-canvas {
   width: 100%;
   min-height: 480px;
@@ -191,6 +217,13 @@ h3 {
   border: 1px solid #d8dee8;
   border-radius: 8px;
   background: #ffffff;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.graph-canvas:active {
+  cursor: grabbing;
 }
 
 .graph-edge line {
@@ -205,19 +238,24 @@ h3 {
 }
 
 .graph-node {
-  cursor: pointer;
+  cursor: grab;
 }
 
 .graph-node circle {
   fill: #eff6ff;
   stroke: #2563eb;
   stroke-width: 2;
+  filter: drop-shadow(0 4px 10px rgb(15 23 42 / 0.12));
 }
 
 .graph-node:hover circle,
 .graph-node:focus-visible circle {
   fill: #dbeafe;
   stroke: #1d4ed8;
+}
+
+.graph-node:active {
+  cursor: grabbing;
 }
 
 .graph-node text {
