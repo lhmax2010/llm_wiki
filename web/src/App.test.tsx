@@ -78,6 +78,18 @@ const graph = {
       stale: false,
       tags: ["decoder"],
       updated: "2026-06-17T00:00:00Z"
+    },
+    {
+      id: "KB-2026-0003",
+      title: "Isolated standalone note",
+      entry_type: "triage_rule",
+      module: "tooling",
+      trust_state: "published",
+      claim_type: "observation",
+      support_strength: "weak",
+      stale: false,
+      tags: ["tooling"],
+      updated: "2026-06-17T00:00:00Z"
     }
   ],
   edges: [
@@ -307,12 +319,28 @@ describe("App", () => {
 
     expect(await screen.findByLabelText("Knowledge graph")).toBeInTheDocument();
     expect(screen.getByText("2 Nodes")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Open KB-2026-0003")).not.toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith("/api/graph");
     await user.click(screen.getByLabelText("Open KB-2026-0001"));
 
     await waitFor(() => {
       expect(fetch).toHaveBeenCalledWith("/api/entries/KB-2026-0001");
     });
+  });
+
+  it("hides isolated graph nodes by default and can show them", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Graph" }));
+
+    expect(await screen.findByText("2 Nodes")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Open KB-2026-0003")).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Hide isolated"));
+
+    expect(await screen.findByText("3 Nodes")).toBeInTheDocument();
+    expect(screen.getByLabelText("Open KB-2026-0003")).toBeInTheDocument();
   });
 });
 

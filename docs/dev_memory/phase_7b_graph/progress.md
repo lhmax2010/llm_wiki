@@ -23,8 +23,9 @@
 - Graph cycle display: related remains directed data, but reciprocal A<->B is
   collapsed into one visual edge with `bidirectional: true` to avoid parallel
   line clutter.
-- Frontend graph implementation: lightweight React/SVG, no new npm dependency.
-  This avoids corporate npm/cert risk and is enough for the MVP.
+- Initial frontend graph implementation: lightweight React/SVG with no graph
+  layout dependency. This was enough for the MVP but became visually cramped
+  with real larger data.
 
 ### Implemented
 
@@ -55,10 +56,59 @@
 - `npm.cmd run build`
   - passed
 
+## 2026-07-13
+
+### Force-Directed Graph Layout Follow-Up (PR #15)
+
+- Real work-machine validation showed that the fixed circle layout becomes
+  cramped once many published entries exist.
+- Replaced the fixed ring layout with `d3-force@3.0.0` while keeping the
+  existing React/SVG renderer and the existing `GET /api/graph` response.
+- Backend graph rules did not change:
+  - nodes remain published entries only;
+  - edges remain `related` links whose source and target are both published;
+  - research/staging/deprecated remain excluded from graph data.
+- Implemented force layout with:
+  - `forceManyBody` repulsion;
+  - `forceLink` attraction for related edges;
+  - `forceCenter` centering;
+  - `forceCollide(radius = node.radius + 12, strength = 1, iterations = 2)`
+    as the hard no-overlap guard.
+- Added graph usability controls:
+  - node radius scales by degree so hub knowledge is visually larger;
+  - wheel zoom centered on the mouse position;
+  - canvas drag/pan;
+  - draggable nodes using the standard `fx`/`fy` + `alphaTarget` d3-force
+    pattern;
+  - click-vs-drag threshold to avoid opening entries while dragging;
+  - Reset view;
+  - Hide isolated toggle, enabled by default;
+  - `requestAnimationFrame` throttling for simulation tick updates.
+- New npm dependency:
+  - `d3-force@3.0.0`;
+  - `@types/d3-force` as a dev dependency;
+  - local installed package footprint is about 163 KiB including
+    `d3-dispatch`, `d3-quadtree`, and `d3-timer`.
+- Runtime note: any machine pulling PR #15 or later must run `npm install`
+  under `web/` before starting the frontend, otherwise Vite cannot resolve
+  `d3-force`.
+
+### Targeted Verification
+
+- `npm.cmd run lint`
+  - passed
+- `npm.cmd run test`
+  - `10 passed`
+- `npm.cmd run build`
+  - passed
+- Local smoke:
+  - `GET http://127.0.0.1:5174/api/graph` -> 200;
+  - real local graph data returned 138 nodes and 6 edges.
+
 ### TODO / Follow-Up
 
-- Large graph performance is intentionally not optimized in this MVP. Add
-  filtering/centering/caching if graph size grows.
+- Large graph data fetching is still all-published-entry scan on `/api/graph`.
+  Add server-side filtering/centering/caching if graph size grows further.
 - Related duplicate-edge normalization is not enforced yet; graph display
   collapses reciprocal visual edges, but stored data can still contain repeated
   human entries.

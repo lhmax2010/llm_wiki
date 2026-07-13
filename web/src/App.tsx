@@ -1,4 +1,20 @@
-import { FormEvent, useEffect, useState } from "react";
+import {
+  FormEvent,
+  PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+  type Simulation
+} from "d3-force";
 import {
   approveReviewItem,
   getEntry,
@@ -530,68 +546,222 @@ function GraphPanel({
 }) {
   const width = 920;
   const height = 560;
-  const positions = graphPositions(graph.nodes, width, height);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const panRef = useRef<PanGesture | null>(null);
+  const nodeDragRef = useRef<NodeDragGesture | null>(null);
+  const [hideIsolated, setHideIsolated] = useState(true);
+  const [viewport, setViewport] = useState<GraphViewport>({ x: 0, y: 0, scale: 1 });
+  const visibleGraph = useMemo(
+    () => visibleGraphData(graph, hideIsolated),
+    [graph, hideIsolated]
+  );
+  const { positions, radii, dragNode, releaseNode } = useForceGraphLayout(
+    visibleGraph.nodes,
+    visibleGraph.edges,
+    visibleGraph.degrees,
+    width,
+    height
+  );
+
+  function resetView() {
+    setViewport({ x: 0, y: 0, scale: 1 });
+  }
+
+  function pointFromEvent(event: Pick<ReactPointerEvent | ReactWheelEvent, "clientX" | "clientY">) {
+    return svgPoint(svgRef.current, event.clientX, event.clientY, width, height);
+  }
+
+  function graphPointFromEvent(
+    event: Pick<ReactPointerEvent | ReactWheelEvent, "clientX" | "clientY">
+  ) {
+    return viewportToGraphPoint(pointFromEvent(event), viewport);
+  }
+
+  function onWheel(event: ReactWheelEvent<SVGSVGElement>) {
+    event.preventDefault();
+    const svgPointValue = pointFromEvent(event);
+    const graphPointValue = viewportToGraphPoint(svgPointValue, viewport);
+    const factor = event.deltaY > 0 ? 0.88 : 1.12;
+    const nextScale = clamp(viewport.scale * factor, 0.25, 2.8);
+    setViewport({
+      scale: nextScale,
+      x: svgPointValue.x - graphPointValue.x * nextScale,
+      y: svgPointValue.y - graphPointValue.y * nextScale
+    });
+  }
+
+  function onCanvasPointerDown(event: ReactPointerEvent<SVGSVGElement>) {
+    const target = event.target;
+    if (target instanceof Element && target.closest(".graph-node")) {
+      return;
+    }
+    setPointerCaptureIfAvailable(event.currentTarget, event.pointerId);
+    panRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startViewport: viewport
+    };
+  }
+
+  function onCanvasPointerMove(event: ReactPointerEvent<SVGSVGElement>) {
+    const pan = panRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) {
+      return;
+    }
+    const rect = svgRef.current?.getBoundingClientRect();
+    const scaleX = rect && rect.width > 0 ? width / rect.width : 1;
+    const scaleY = rect && rect.height > 0 ? height / rect.height : 1;
+    setViewport({
+      ...pan.startViewport,
+      x: pan.startViewport.x + (event.clientX - pan.startClientX) * scaleX,
+      y: pan.startViewport.y + (event.clientY - pan.startClientY) * scaleY
+    });
+  }
+
+  function onCanvasPointerUp(event: ReactPointerEvent<SVGSVGElement>) {
+    if (panRef.current?.pointerId === event.pointerId) {
+      panRef.current = null;
+      releasePointerCaptureIfAvailable(event.currentTarget, event.pointerId);
+    }
+  }
+
+  function onNodePointerDown(event: ReactPointerEvent<SVGGElement>, nodeId: string) {
+    event.preventDefault();
+    event.stopPropagation();
+    setPointerCaptureIfAvailable(event.currentTarget, event.pointerId);
+    const point = graphPointFromEvent(event);
+    nodeDragRef.current = {
+      nodeId,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      moved: false
+    };
+    dragNode(nodeId, point);
+  }
+
+  function onNodePointerMove(event: ReactPointerEvent<SVGGElement>) {
+    const drag = nodeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const movedDistance = Math.hypot(
+      event.clientX - drag.startClientX,
+      event.clientY - drag.startClientY
+    );
+    if (movedDistance > 4) {
+      drag.moved = true;
+    }
+    dragNode(drag.nodeId, graphPointFromEvent(event));
+  }
+
+  function onNodePointerUp(event: ReactPointerEvent<SVGGElement>, nodeId: string) {
+    const drag = nodeDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    releasePointerCaptureIfAvailable(event.currentTarget, event.pointerId);
+    nodeDragRef.current = null;
+    releaseNode(nodeId);
+    if (!drag.moved) {
+      onSelect(nodeId);
+    }
+  }
+
   return (
     <section className="graph-panel" aria-label="Knowledge graph">
       <div className="detail-header">
         <div>
           <span className="eyebrow">knowledge graph</span>
-          <h2>{graph.nodes.length} Nodes</h2>
+          <h2>{visibleGraph.nodes.length} Nodes</h2>
         </div>
-        <span className="status">{graph.edges.length} edges</span>
+        <div className="graph-actions">
+          <label>
+            <input
+              checked={hideIsolated}
+              onChange={(event) => setHideIsolated(event.target.checked)}
+              type="checkbox"
+            />
+            Hide isolated
+          </label>
+          <button type="button" onClick={resetView}>
+            Reset view
+          </button>
+          <span className="status">{visibleGraph.edges.length} edges</span>
+        </div>
       </div>
 
-      {graph.nodes.length === 0 ? (
-        <p className="muted">No published graph nodes.</p>
+      {visibleGraph.nodes.length === 0 ? (
+        <p className="muted">
+          {graph.nodes.length === 0
+            ? "No published graph nodes."
+            : "No connected nodes. Turn off Hide isolated to show standalone entries."}
+        </p>
       ) : (
-        <svg className="graph-canvas" viewBox={`0 0 ${width} ${height}`} role="img">
+        <svg
+          className="graph-canvas"
+          onPointerDown={onCanvasPointerDown}
+          onPointerLeave={onCanvasPointerUp}
+          onPointerMove={onCanvasPointerMove}
+          onPointerUp={onCanvasPointerUp}
+          onWheel={onWheel}
+          ref={svgRef}
+          role="img"
+          viewBox={`0 0 ${width} ${height}`}
+        >
           <title>Published KB related graph</title>
-          {graph.edges.map((edge) => {
-            const source = positions[edge.source];
-            const target = positions[edge.target];
-            if (!source || !target) {
-              return null;
-            }
-            const midX = (source.x + target.x) / 2;
-            const midY = (source.y + target.y) / 2;
-            return (
-              <g className="graph-edge" key={`${edge.source}-${edge.target}`}>
-                <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} />
-                <text x={midX} y={midY - 8}>
-                  {edge.bidirectional ? "<-> " : ""}
-                  {edge.types.join(", ")}
-                </text>
-              </g>
-            );
-          })}
-          {graph.nodes.map((node) => {
-            const position = positions[node.id];
-            return (
-              <g
-                aria-label={`Open ${node.id}`}
-                className="graph-node"
-                key={node.id}
-                onClick={() => onSelect(node.id)}
-                role="button"
-                tabIndex={0}
-                transform={`translate(${position.x}, ${position.y})`}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelect(node.id);
-                  }
-                }}
-              >
-                <circle r="34" />
-                <text className="node-id" y="-4">
-                  {node.id.replace("KB-", "")}
-                </text>
-                <text className="node-title" y="14">
-                  {truncate(node.title, 18)}
-                </text>
-              </g>
-            );
-          })}
+          <g transform={`translate(${viewport.x}, ${viewport.y}) scale(${viewport.scale})`}>
+            {visibleGraph.edges.map((edge) => {
+              const source = positions[edge.source];
+              const target = positions[edge.target];
+              if (!source || !target) {
+                return null;
+              }
+              const midX = (source.x + target.x) / 2;
+              const midY = (source.y + target.y) / 2;
+              return (
+                <g className="graph-edge" key={`${edge.source}-${edge.target}`}>
+                  <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} />
+                  <text x={midX} y={midY - 8}>
+                    {edge.bidirectional ? "<-> " : ""}
+                    {edge.types.join(", ")}
+                  </text>
+                </g>
+              );
+            })}
+            {visibleGraph.nodes.map((node) => {
+              const position = positions[node.id] ?? { x: width / 2, y: height / 2 };
+              const radius = radii[node.id] ?? 30;
+              return (
+                <g
+                  aria-label={`Open ${node.id}`}
+                  className="graph-node"
+                  key={node.id}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelect(node.id);
+                    }
+                  }}
+                  onPointerDown={(event) => onNodePointerDown(event, node.id)}
+                  onPointerMove={onNodePointerMove}
+                  onPointerUp={(event) => onNodePointerUp(event, node.id)}
+                  role="button"
+                  tabIndex={0}
+                  transform={`translate(${position.x}, ${position.y})`}
+                >
+                  <circle r={radius} />
+                  <text className="node-id" y="-4">
+                    {node.id.replace("KB-", "")}
+                  </text>
+                  <text className="node-title" y="14">
+                    {truncate(node.title, Math.max(12, Math.floor(radius / 2)))}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
         </svg>
       )}
     </section>
@@ -954,25 +1124,263 @@ function sourceRefSummary(item: Record<string, unknown>) {
   return target ? `${type}${role}: ${String(target)}` : `${type}${role}`;
 }
 
-function graphPositions(nodes: GraphResponse["nodes"], width: number, height: number) {
+type GraphPoint = {
+  x: number;
+  y: number;
+};
+
+type GraphViewport = GraphPoint & {
+  scale: number;
+};
+
+type ForceGraphNode = GraphResponse["nodes"][number] & {
+  degree: number;
+  radius: number;
+  x?: number;
+  y?: number;
+  vx?: number;
+  vy?: number;
+  fx?: number | null;
+  fy?: number | null;
+};
+
+type ForceGraphLink = {
+  source: string | ForceGraphNode;
+  target: string | ForceGraphNode;
+};
+
+type PanGesture = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startViewport: GraphViewport;
+};
+
+type NodeDragGesture = {
+  nodeId: string;
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  moved: boolean;
+};
+
+function visibleGraphData(graph: GraphResponse, hideIsolated: boolean) {
+  const degreeEntries = graph.nodes.map((node) => [node.id, 0] as const);
+  const degrees = new Map<string, number>(degreeEntries);
+  for (const edge of graph.edges) {
+    degrees.set(edge.source, (degrees.get(edge.source) ?? 0) + 1);
+    degrees.set(edge.target, (degrees.get(edge.target) ?? 0) + 1);
+  }
+  const nodes = hideIsolated
+    ? graph.nodes.filter((node) => (degrees.get(node.id) ?? 0) > 0)
+    : graph.nodes;
+  const visibleIds = new Set(nodes.map((node) => node.id));
+  const edges = graph.edges.filter(
+    (edge) => visibleIds.has(edge.source) && visibleIds.has(edge.target)
+  );
+  return { nodes, edges, degrees };
+}
+
+function useForceGraphLayout(
+  nodes: GraphResponse["nodes"],
+  edges: GraphResponse["edges"],
+  degrees: Map<string, number>,
+  width: number,
+  height: number
+) {
+  const nodeMapRef = useRef<Map<string, ForceGraphNode>>(new Map());
+  const simulationRef = useRef<Simulation<ForceGraphNode, ForceGraphLink> | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const [layout, setLayout] = useState(() => forceLayoutSnapshot(nodes, degrees, width, height));
+
+  useEffect(() => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    simulationRef.current?.stop();
+
+    const forceNodes = nodes.map((node, index) => {
+      const position = initialGraphPosition(index, nodes.length, width, height);
+      const degree = degrees.get(node.id) ?? 0;
+      return {
+        ...node,
+        degree,
+        radius: graphNodeRadius(degree),
+        x: position.x,
+        y: position.y
+      };
+    });
+    const forceLinks: ForceGraphLink[] = edges.map((edge) => ({
+      source: edge.source,
+      target: edge.target
+    }));
+    nodeMapRef.current = new Map(forceNodes.map((node) => [node.id, node]));
+    setLayout(snapshotFromForceNodes(forceNodes));
+
+    if (forceNodes.length === 0) {
+      simulationRef.current = null;
+      return;
+    }
+
+    const simulation = forceSimulation<ForceGraphNode>(forceNodes)
+      .force(
+        "link",
+        forceLink<ForceGraphNode, ForceGraphLink>(forceLinks)
+          .id((node) => node.id)
+          .distance(155)
+          .strength(0.48)
+      )
+      .force("charge", forceManyBody<ForceGraphNode>().strength((node) => -380 - node.degree * 70))
+      .force(
+        "collide",
+        forceCollide<ForceGraphNode>()
+          .radius((node) => node.radius + 12)
+          .strength(1)
+          .iterations(2)
+      )
+      .force("center", forceCenter<ForceGraphNode>(width / 2, height / 2).strength(0.12))
+      .alpha(0.95)
+      .alphaDecay(0.035)
+      .velocityDecay(0.42)
+      .on("tick", () => {
+        if (frameRef.current !== null) {
+          return;
+        }
+        frameRef.current = requestAnimationFrame(() => {
+          frameRef.current = null;
+          setLayout(snapshotFromForceNodes(forceNodes));
+        });
+      });
+    simulationRef.current = simulation;
+
+    return () => {
+      simulation.stop();
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
+    };
+  }, [nodes, edges, degrees, width, height]);
+
+  function dragNode(id: string, point: GraphPoint) {
+    const node = nodeMapRef.current.get(id);
+    if (!node) {
+      return;
+    }
+    node.x = point.x;
+    node.y = point.y;
+    node.fx = point.x;
+    node.fy = point.y;
+    simulationRef.current?.alphaTarget(0.25).restart();
+    setLayout(snapshotFromForceNodes([...nodeMapRef.current.values()]));
+  }
+
+  function releaseNode(id: string) {
+    const node = nodeMapRef.current.get(id);
+    if (!node) {
+      return;
+    }
+    node.fx = null;
+    node.fy = null;
+    simulationRef.current?.alphaTarget(0);
+  }
+
+  return {
+    positions: layout.positions,
+    radii: layout.radii,
+    dragNode,
+    releaseNode
+  };
+}
+
+function forceLayoutSnapshot(
+  nodes: GraphResponse["nodes"],
+  degrees: Map<string, number>,
+  width: number,
+  height: number
+) {
+  const forceNodes = nodes.map((node, index) => {
+    const position = initialGraphPosition(index, nodes.length, width, height);
+    const degree = degrees.get(node.id) ?? 0;
+    return {
+      ...node,
+      degree,
+      radius: graphNodeRadius(degree),
+      x: position.x,
+      y: position.y
+    };
+  });
+  return snapshotFromForceNodes(forceNodes);
+}
+
+function snapshotFromForceNodes(nodes: ForceGraphNode[]) {
+  const positions: Record<string, GraphPoint> = {};
+  const radii: Record<string, number> = {};
+  for (const node of nodes) {
+    positions[node.id] = {
+      x: node.x ?? 0,
+      y: node.y ?? 0
+    };
+    radii[node.id] = node.radius;
+  }
+  return { positions, radii };
+}
+
+function initialGraphPosition(index: number, count: number, width: number, height: number) {
   const centerX = width / 2;
   const centerY = height / 2;
-  if (nodes.length === 1) {
-    return { [nodes[0].id]: { x: centerX, y: centerY } };
+  if (count <= 1) {
+    return { x: centerX, y: centerY };
   }
-  const radius = Math.min(width, height) * 0.34;
-  return Object.fromEntries(
-    nodes.map((node, index) => {
-      const angle = (2 * Math.PI * index) / nodes.length - Math.PI / 2;
-      return [
-        node.id,
-        {
-          x: centerX + radius * Math.cos(angle),
-          y: centerY + radius * Math.sin(angle)
-        }
-      ];
-    })
-  );
+  const radius = Math.min(width, height) * 0.26;
+  const angle = (2 * Math.PI * index) / count - Math.PI / 2;
+  return {
+    x: centerX + radius * Math.cos(angle),
+    y: centerY + radius * Math.sin(angle)
+  };
+}
+
+function graphNodeRadius(degree: number) {
+  return clamp(26 + degree * 4, 26, 52);
+}
+
+function svgPoint(
+  svg: SVGSVGElement | null,
+  clientX: number,
+  clientY: number,
+  width: number,
+  height: number
+): GraphPoint {
+  const rect = svg?.getBoundingClientRect();
+  if (!rect || rect.width === 0 || rect.height === 0) {
+    return { x: width / 2, y: height / 2 };
+  }
+  return {
+    x: ((clientX - rect.left) / rect.width) * width,
+    y: ((clientY - rect.top) / rect.height) * height
+  };
+}
+
+function viewportToGraphPoint(point: GraphPoint, viewport: GraphViewport): GraphPoint {
+  return {
+    x: (point.x - viewport.x) / viewport.scale,
+    y: (point.y - viewport.y) / viewport.scale
+  };
+}
+
+function setPointerCaptureIfAvailable(element: Element, pointerId: number) {
+  const target = element as Element & { setPointerCapture?: (pointerId: number) => void };
+  target.setPointerCapture?.(pointerId);
+}
+
+function releasePointerCaptureIfAvailable(element: Element, pointerId: number) {
+  const target = element as Element & { releasePointerCapture?: (pointerId: number) => void };
+  target.releasePointerCapture?.(pointerId);
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function truncate(value: string, maxLength: number) {
