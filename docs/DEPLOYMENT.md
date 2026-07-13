@@ -43,6 +43,7 @@ uv sync --system-certs
 ```powershell
 cd C:\path\to\llm_wiki\unified-kb\web
 npm install
+# After pulling PR #15 or later, run npm install again so d3-force is present.
 ```
 
 企业网络如果有 SSL 拦截，优先使用系统证书配置；Node/npm 侧按本机企业网络策略配置 registry/cert。

@@ -35,7 +35,14 @@ propose routes, and the read side remains a P7a/P4 published-entry view.
   - reciprocal A<->B edges collapse into one visual edge with
     `bidirectional: true`.
 - Frontend graph:
-  - lightweight React/SVG graph, no new npm dependency;
+  - initial lightweight React/SVG graph shipped in PR #11;
+  - PR #15 upgrades the layout to `d3-force@3.0.0` while keeping React/SVG
+    rendering;
+  - force layout uses many-body repulsion, related-link attraction, centering,
+    and collide-based no-overlap spacing;
+  - node size reflects degree, canvas supports zoom/pan, nodes are draggable,
+    Reset view is available, and isolated nodes are hidden by default behind a
+    toggle;
   - graph button loads `/api/graph`;
   - clicking a node loads the normal entry detail through `GET
     /api/entries/{id}`.
@@ -72,19 +79,21 @@ propose routes, and the read side remains a P7a/P4 published-entry view.
   - `uv run uvicorn web_api.app:app --host 127.0.0.1 --port 8000`
 - Start frontend:
   - `cd web`
+  - after pulling PR #15 or later, run `npm install` once so `d3-force` and its
+    types are present locally;
   - `npm run dev -- --host 127.0.0.1 --port 5174 --strictPort`
 - Visit:
   - `http://127.0.0.1:5174`
 - Restart both backend and frontend after pulling this branch. The backend needs
-  the new `/api/graph` route and the frontend needs the new Graph button and
-  related editor.
+  the new `/api/graph` route and the frontend needs the new Graph button,
+  related editor, and PR #15 force-layout bundle.
 
 ## Remaining Risks / TODO
 
-- Large graph performance is not optimized in MVP. Add caching, centering, or
-  filtering if graph size grows. This is merged into the broader P4/P7a
-  network read backlog: graph currently scans all published entries and
-  validates through Pydantic on request.
+- Large graph fetching is still not optimized on the backend. Add caching,
+  centering, or filtering if graph size grows further. This is merged into the
+  broader P4/P7a network read backlog: graph currently scans all published
+  entries and validates through Pydantic on request.
 - Related duplicate-edge normalization is not enforced at storage time. The
   graph response collapses reciprocal visual edges, but repeated stored human
   edges can still exist.
