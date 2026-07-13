@@ -6,7 +6,7 @@
 
 - Active phase: `none`
 - Last merged phase: `phase_8c_review_detail_diff`
-- Last maintenance checkpoint: `checkpoint/p5-index-sync`
+- Last maintenance checkpoint: `checkpoint/graph-force-layout`
 
 ## Phases
 
@@ -31,5 +31,6 @@
 |------|------|--------|------------|----|------------|
 | 2026-07-06 | p5-reject-update | Merged | `docs/dev_memory/phase_5_staging_review/` | https://github.com/lhmax2010/llm_wiki/pull/12 | a9663d6 (merge), 86f389d (PR head), 92c8cd1 (code) |
 | 2026-07-10 | p5-index-sync | Merged | `docs/dev_memory/phase_5_staging_review/` | https://github.com/lhmax2010/llm_wiki/pull/14 | 0ec9e10 (merge), 9282f31 (PR head/docs), d3889ba (code) |
+| 2026-07-13 | graph-force-layout | Merged | `docs/dev_memory/phase_7b_graph/` | https://github.com/lhmax2010/llm_wiki/pull/15 | be6946e (merge), 4481746 (PR head/docs), c03f806 (code) |
 
 Status vocabulary: 进行中 / 待 Review / 已 Merge / 已 Skip.
