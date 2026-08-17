@@ -198,6 +198,13 @@ describe("App", () => {
       expect(body.trust_state).toBeUndefined();
       expect(body.author_type).toBeUndefined();
       expect(body.changed_fields).toBeUndefined();
+      // F3: create is the one path that legitimately sets the trust verdict,
+      // because there is no published entry to inherit one from.
+      expect(body.credibility).toEqual({
+        claim_type: "observation",
+        support_strength: "strong",
+        evidence: [{ type: "human_note", excerpt: "Observed by reviewer." }]
+      });
     });
   });
 
@@ -238,6 +245,90 @@ describe("App", () => {
       expect(body.id).toBeUndefined();
       expect(body.trust_state).toBeUndefined();
       expect(body.changed_fields).toBeUndefined();
+      expect(body.credibility).toBeUndefined();
+    });
+  });
+
+  it("never sends credibility when editing, and shows the preserved evidence read-only", async () => {
+    // F1: a fact/weak entry with three evidence items of mixed shape is the
+    // case that used to be corrupted -- collapsed to one human_note and
+    // inflated to observation/strong -- by an edit to an unrelated field.
+    const richEntry = {
+      ...entry,
+      credibility: {
+        claim_type: "fact",
+        support_strength: "weak",
+        evidence: [
+          { type: "log", attachment_id: "decoder-crash.log" },
+          { type: "human_note", excerpt: "Observed by reviewer." },
+          { type: "ticket", ref: "JIRA-4821" }
+        ]
+      }
+    };
+    vi.stubGlobal("fetch", vi.fn(mockFetchWithEntry(richEntry)));
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "alice");
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+
+    const evidenceBox = screen.getByLabelText("Evidence") as HTMLTextAreaElement;
+    expect(evidenceBox).toHaveAttribute("readonly");
+    expect(evidenceBox.value.split("\n")).toEqual([
+      "log: decoder-crash.log",
+      "human_note: Observed by reviewer.",
+      "ticket: JIRA-4821"
+    ]);
+    expect(screen.getByText(/preserves all 3 evidence item/)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText("Title"));
+    await user.type(screen.getByLabelText("Title"), "Updated title only");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock().mock.calls.find(
+        ([url, init]) => url === "/api/entries/KB-2026-0001" && init?.method === "PATCH"
+      );
+      expect(patchCall).toBeTruthy();
+      const body = JSON.parse(String((patchCall?.[1] as RequestInit).body)) as Record<
+        string,
+        unknown
+      >;
+      expect(body.title).toBe("Updated title only");
+      expect(body.credibility).toBeUndefined();
+      expect(JSON.stringify(body)).not.toContain("support_strength");
+    });
+  });
+
+  it("can submit an edit for an entry that has no evidence", async () => {
+    // F2: the Evidence box used to be `required`, so an entry with an empty
+    // evidence list could not be edited at all -- Submit silently did nothing.
+    const noEvidenceEntry = {
+      ...entry,
+      credibility: { claim_type: "observation", support_strength: "moderate", evidence: [] }
+    };
+    vi.stubGlobal("fetch", vi.fn(mockFetchWithEntry(noEvidenceEntry)));
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.type(await screen.findByLabelText("User"), "alice");
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(screen.getByText(/no evidence/)).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Title"));
+    await user.type(screen.getByLabelText("Title"), "Now editable");
+    await user.click(screen.getByRole("button", { name: "Submit" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock().mock.calls.find(
+        ([url, init]) => url === "/api/entries/KB-2026-0001" && init?.method === "PATCH"
+      );
+      expect(patchCall).toBeTruthy();
+      const body = JSON.parse(String((patchCall?.[1] as RequestInit).body)) as Record<
+        string,
+        unknown
+      >;
+      expect(body.title).toBe("Now editable");
+      expect(body.credibility).toBeUndefined();
     });
   });
 
@@ -450,6 +541,19 @@ function mockFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     return ok({ entries: [entry], has_more: false });
   }
   return Promise.resolve(new Response("not found", { status: 404 }));
+}
+
+function mockFetchWithEntry(replacement: Record<string, unknown>) {
+  return (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    if (url.startsWith("/api/entries/KB-2026-0001") && init?.method !== "PATCH") {
+      return ok({ entry: replacement });
+    }
+    if (url.startsWith("/api/entries") && !init?.method) {
+      return ok({ entries: [replacement], has_more: false });
+    }
+    return mockFetch(input, init);
+  };
 }
 
 function mockManyEntriesFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
