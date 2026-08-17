@@ -7,6 +7,7 @@ const entry = {
   id: "KB-2026-0001",
   schema_version: 3,
   title: "8k photo defect",
+  summary: "Photo loading fails until decoder state is initialized.",
   entry_type: "defect_case",
   module: "photo",
   snippet: "8k photo path fails",
@@ -119,6 +120,9 @@ describe("App", () => {
     expect(await screen.findAllByText("8k photo defect")).toHaveLength(2);
     expect(screen.getByText("KB-2026-0001 / photo / observation")).toBeInTheDocument();
     expect(await screen.findByText("human_note: Observed in local seed.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Photo loading fails until decoder state is initialized.")
+    ).toBeInTheDocument();
     expect(screen.getByText("published")).toBeInTheDocument();
     expect(screen.getByText("-1")).toBeInTheDocument();
     expect(screen.queryByText("schema_version")).not.toBeInTheDocument();
@@ -160,6 +164,7 @@ describe("App", () => {
     await user.type(await screen.findByLabelText("User"), "alice");
     await user.click(screen.getByRole("button", { name: "New" }));
     await user.type(screen.getByLabelText("Title"), "New decoder note");
+    await user.type(screen.getByLabelText("Summary"), "Decoder must initialize before use.");
     await user.type(screen.getByLabelText("Module"), "decoder");
     await user.type(screen.getByLabelText("Tags"), "decoder, 8k");
     await user.type(screen.getByLabelText("Related"), "KB-2026-0001 related seed-link");
@@ -179,6 +184,7 @@ describe("App", () => {
       });
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body.title).toBe("New decoder note");
+      expect(body.summary).toBe("Decoder must initialize before use.");
       expect(body.tags).toEqual(["decoder", "8k"]);
       expect(body.related).toEqual([
         {
@@ -203,6 +209,8 @@ describe("App", () => {
     await user.click(await screen.findByRole("button", { name: "Edit" }));
     await user.clear(screen.getByLabelText("Title"));
     await user.type(screen.getByLabelText("Title"), "Updated 8k photo defect");
+    await user.clear(screen.getByLabelText("Summary"));
+    await user.type(screen.getByLabelText("Summary"), "Updated one-line summary.");
     await user.click(screen.getByRole("button", { name: "Submit" }));
 
     await waitFor(() => {
@@ -217,6 +225,7 @@ describe("App", () => {
       });
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body.title).toBe("Updated 8k photo defect");
+      expect(body.summary).toBe("Updated one-line summary.");
       expect(body.entry_type).toBeUndefined();
       expect(body.related).toEqual([
         {

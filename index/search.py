@@ -404,6 +404,7 @@ def _entry_search_text(entry: Entry) -> str:
     parts = [
         entry.id,
         entry.title,
+        entry.summary,
         entry.module,
         entry.body,
         *entry.tags,
@@ -423,7 +424,8 @@ def _term_matches_text(term: str, text: str) -> bool:
 
 
 def _snippet(entry: Entry, terms: list[str], original_query: str) -> str:
-    lines = [entry.title, *entry.body.splitlines()]
+    summary = entry.summary.strip()
+    lines = ([summary] if summary else []) + [entry.title, *entry.body.splitlines()]
     for term in [original_query, *terms]:
         normalized = term.strip().lower()
         if not normalized:
@@ -431,6 +433,8 @@ def _snippet(entry: Entry, terms: list[str], original_query: str) -> str:
         for line in lines:
             if normalized in line.lower() or cjk_bigram_match(normalized, line):
                 return line.strip()[:240]
+    if summary:
+        return summary[:240]
     return entry.title[:240]
 
 
@@ -438,6 +442,7 @@ def _score(entry: Entry, terms: list[str]) -> int:
     if terms == [""]:
         return 0
     title = entry.title.lower()
+    summary = entry.summary.lower()
     module = entry.module.lower()
     body = entry.body.lower()
     score = 0
@@ -447,6 +452,8 @@ def _score(entry: Entry, terms: list[str]) -> int:
             continue
         if normalized in title:
             score += 10
+        if normalized in summary:
+            score += 8
         if normalized in module:
             score += 4
         if normalized in body:

@@ -7,6 +7,7 @@ export type Credibility = {
 export type SearchResult = {
   id: string;
   title: string;
+  summary?: string;
   entry_type: string;
   module: string;
   snippet: string;
@@ -153,6 +154,7 @@ export type GraphResponse = {
 export type EntryWritePayload = {
   entry_type: string;
   title: string;
+  summary: string;
   module: string;
   body: string;
   tags: string[];

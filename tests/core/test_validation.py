@@ -178,6 +178,19 @@ def test_fact_downgrades_to_observation_when_fact_evidence_missing(
     assert _has_issue(report.warnings, IssueCode.W_DOWNGRADE, "credibility.claim_type")
 
 
+def test_summary_does_not_upgrade_claim_type(make_entry: Callable[..., Entry]) -> None:
+    entry = make_entry(
+        claim_type="fact",
+        evidence=[{"type": "human_note", "excerpt": "developer recalled this"}],
+    ).model_copy(update={"summary": "Decoder crash is fixed by changing init order."})
+
+    report = validate_entry(entry, check_evidence_exists=False)
+
+    assert report.ok
+    assert report.entry.summary == "Decoder crash is fixed by changing init order."
+    assert report.entry.credibility.claim_type == "observation"
+
+
 def test_section_credibility_can_be_downgraded_independently(
     make_entry: Callable[..., Entry],
 ) -> None:

@@ -525,6 +525,7 @@ class Entry(TypedDict):
     schema_version: Required[int]
     entry_type: Required[EntryType]
     title: Required[str]
+    summary: NotRequired[str]      # 一句话概括；默认空；≤200 字
     module: Required[str]
     credibility: Required[Credibility]
     trust_state: Required[TrustState]
@@ -551,7 +552,7 @@ class Entry(TypedDict):
 
 # 部分更新用（PUT），所有字段可选
 class EntryUpdate(TypedDict, total=False):
-    title: str; module: str; tags: list[str]; symptom_keywords: list[str]
+    title: str; summary: str; module: str; tags: list[str]; symptom_keywords: list[str]
     error_codes: list[str]; aliases: list[str]; severity: str
     credibility: Credibility; section_credibility: dict[str, SectionCredibility]
     code_binding: CodeBinding; related: list[RelatedEdge]; body: str

@@ -216,6 +216,55 @@ def test_scope_error_code_exact_match_filters_results(tmp_path: Path) -> None:
     assert [result["id"] for result in results] == ["KB-2026-0001"]
 
 
+def test_summary_matches_with_priority_between_title_and_error_code(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    title_hit = entry_payload(
+        entry_id="KB-2026-0001",
+        trust_state="published",
+        title="priority-token title hit",
+    )
+    summary_hit = entry_payload(
+        entry_id="KB-2026-0002",
+        trust_state="published",
+        title="summary-only title",
+    )
+    summary_hit["summary"] = "priority-token concise root cause sentence."
+    error_hit = entry_payload(
+        entry_id="KB-2026-0003",
+        trust_state="published",
+        title="error-code-only title",
+    )
+    error_hit["error_codes"] = ["priority-token"]
+    _write_payload(kb_root, "entries", title_hit)
+    _write_payload(kb_root, "entries", summary_hit)
+    _write_payload(kb_root, "entries", error_hit)
+    service = SearchService(kb_root)
+    service.rebuild_agent_index()
+
+    results = service.search_agent("priority-token", expand_synonyms=False)
+
+    assert [result["id"] for result in results] == [
+        "KB-2026-0001",
+        "KB-2026-0002",
+        "KB-2026-0003",
+    ]
+    assert [result["score"] for result in results] == [10, 8, 5]
+    assert results[1]["snippet"] == "priority-token concise root cause sentence."
+
+
+def test_summary_is_default_snippet_when_query_has_no_specific_hit(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    payload = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    payload["summary"] = "One sentence summary for the entry."
+    _write_payload(kb_root, "entries", payload)
+    service = SearchService(kb_root)
+    service.rebuild_agent_index()
+
+    results = service.search_agent("", expand_synonyms=False)
+
+    assert results[0]["snippet"] == "One sentence summary for the entry."
+
+
 def test_index_read_entries_normalizes_invalid_source_dir_to_index_unavailable(
     tmp_path: Path,
 ) -> None:

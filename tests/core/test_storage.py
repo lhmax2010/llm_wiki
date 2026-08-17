@@ -76,3 +76,21 @@ def test_entry_rejects_non_v3_schema(make_entry: Callable[..., Entry]) -> None:
 
     with pytest.raises(ValidationError, match="schema_version must be 3"):
         Entry.model_validate(payload)
+
+
+def test_summary_is_optional_and_normalized(make_entry: Callable[..., Entry]) -> None:
+    payload = make_entry().model_dump(mode="json")
+    payload.pop("summary")
+
+    assert Entry.model_validate(payload).summary == ""
+
+    payload["summary"] = "  decoder crash\nroot cause   note  "
+    assert Entry.model_validate(payload).summary == "decoder crash root cause note"
+
+
+def test_summary_length_limit(make_entry: Callable[..., Entry]) -> None:
+    payload = make_entry().model_dump(mode="json")
+    payload["summary"] = "x" * 201
+
+    with pytest.raises(ValidationError):
+        Entry.model_validate(payload)

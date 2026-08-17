@@ -397,6 +397,11 @@ def test_update_changed_fields_auto_light_and_heavy(
         payload=entry_payload(trust_state="published", aliases=["decoder"]),
     )
     light["previous_payload"] = entry_payload(trust_state="published", aliases=[])
+    summary = make_context(
+        operation="update",
+        payload={**entry_payload(trust_state="published"), "summary": "New concise conclusion."},
+    )
+    summary["previous_payload"] = entry_payload(trust_state="published")
     changed_body = f"{entry_payload(trust_state='published')['body']}\n\n## 备注\nchanged\n"
     heavy = make_context(
         operation="update",
@@ -404,7 +409,12 @@ def test_update_changed_fields_auto_light_and_heavy(
     )
     heavy["previous_payload"] = entry_payload(trust_state="published")
 
-    for context, expected in ((auto, "auto"), (light, "light"), (heavy, "heavy")):
+    for context, expected in (
+        (auto, "auto"),
+        (light, "light"),
+        (summary, "light"),
+        (heavy, "heavy"),
+    ):
         context = schema_validate()(context)["context"]
         context = evidence_validate()(context)["context"]
         result = classify_write_route()(context)

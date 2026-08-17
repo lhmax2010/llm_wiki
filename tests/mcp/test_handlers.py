@@ -11,7 +11,7 @@ from governed_api.types import MiddlewareContext, MiddlewareResult, ok
 
 from core.id_allocator import IDAllocator
 from core.models import Entry
-from core.storage import write_entry
+from core.storage import read_entry, write_entry
 from index.search import SearchService
 from mcp.kb_server.handlers import MCPHandlers, ToolError
 from research.store import ResearchRecord, write_research_record
@@ -326,6 +326,7 @@ def test_propose_entry_uses_governed_pipeline_to_allocate_persist_and_audit(
     handlers: MCPHandlers,
 ) -> None:
     draft = entry_payload(entry_id=None, trust_state="pending")
+    draft["summary"] = "MCP agent supplied a concise summary."
     credibility = draft.pop("credibility")
 
     result = handlers.propose_entry(draft=draft, credibility=credibility, request_id="req-1")
@@ -334,6 +335,8 @@ def test_propose_entry_uses_governed_pipeline_to_allocate_persist_and_audit(
     assert result["status"] == "pending"
     assert (handlers.kb_root / "staging" / "KB-2026-0001.md").exists()
     assert (handlers.kb_root / "indexes" / "audit.jsonl").exists()
+    staged = read_entry(handlers.kb_root / "staging" / "KB-2026-0001.md")
+    assert staged.summary == "MCP agent supplied a concise summary."
 
 
 def test_propose_update_uses_previous_entry_for_actual_diff_not_self_report(

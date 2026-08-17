@@ -423,7 +423,10 @@ def test_web_propose_entry_persists_to_staging_and_audit(
         )
     )
 
-    response = client.post("/api/entries", json=_web_create_payload(), headers=WRITE_HEADERS)
+    payload = _web_create_payload()
+    payload["summary"] = "Decoder fails until initialization order is corrected."
+
+    response = client.post("/api/entries", json=payload, headers=WRITE_HEADERS)
 
     assert response.status_code == 201
     assert response.json()["ok"] is True
@@ -433,6 +436,8 @@ def test_web_propose_entry_persists_to_staging_and_audit(
     assert (kb_root / "staging" / "KB-2026-0001.md").is_file()
     assert not (kb_root / "entries" / "KB-2026-0001.md").exists()
     assert (kb_root / "indexes" / "audit.jsonl").is_file()
+    staged = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    assert staged.summary == "Decoder fails until initialization order is corrected."
 
 
 def test_web_propose_entry_accepts_valid_related_through_pipeline(
@@ -539,7 +544,10 @@ def test_web_propose_update_persists_to_staging_and_keeps_published_entry(
 
     response = client.patch(
         "/api/entries/KB-2026-0001",
-        json={"body": entry_payload(entry_id=None)["body"].replace("content.", "updated.")},
+        json={
+            "summary": "Published entry now has a concise update summary.",
+            "body": entry_payload(entry_id=None)["body"].replace("content.", "updated."),
+        },
         headers=WRITE_HEADERS,
     )
 
@@ -551,6 +559,24 @@ def test_web_propose_update_persists_to_staging_and_keeps_published_entry(
     assert (kb_root / "entries" / "KB-2026-0001.md").is_file()
     staged = Entry.model_validate(WebReadService(kb_root).get_entry("KB-2026-0001"))
     assert staged.trust_state == "published"
+    proposal = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    assert proposal.summary == "Published entry now has a concise update summary."
+
+
+def test_web_propose_entry_rejects_overlong_summary(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    client = TestClient(
+        create_app(repo_root=tmp_path, kb_root=tmp_path / "kb", roles_config=roles_config)
+    )
+    payload = _web_create_payload()
+    payload["summary"] = "x" * 201
+
+    response = client.post("/api/entries", json=payload, headers=WRITE_HEADERS)
+
+    assert response.status_code == 422
+    assert not (tmp_path / "kb" / "staging").exists()
 
 
 def test_web_writes_fail_closed_without_auth_or_write_intent(

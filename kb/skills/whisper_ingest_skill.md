@@ -18,6 +18,7 @@
 - 把白话内容拆进 design §3.4 的段落骨架。`section_credibility` 的 key 必须对应骨架段落。
 - **白话里拿不到的精确值，留 `OPEN`，绝不编造**——不编 `git_sha` / 行号 / 错误码 / 文件名 / 版本号 / 日志片段。这是铁律：白话经验本来就模糊，宁可留 `OPEN` 也不臆造。
 - `claim_type` **默认 `observation`**（人的经验回忆，非强证据）。不自报 `fact`——让 KB 的 `evidence_validate` 裁决。
+- 起草 `summary`：一句话概括白话经验的结论、根因或使用条件（≤200 字）。`title` 是短标签，`summary` 是一句话讲清楚；白话不够明确就写出已确认部分，不脑补。
 - 填检索字段（`symptom_keywords` / `error_codes` / `log_signatures` / `aliases`）：只从原话能确认的内容摘录，拿不到留空或 `OPEN`。
 
 ### 2. 原话留底（provenance，防曲解）
@@ -40,6 +41,7 @@
 
 - 把起草的结构化草稿**完整展示**给开发人员，包括：
   - 判定的 `entry_type`
+  - `summary`（一句话概括）和理由
   - 各骨架段落填了什么 / 哪些留了 `OPEN`
   - `claim_type`（observation）和理由
   - 原话留底内容
