@@ -35,15 +35,16 @@
    - `code_flow`：代码路径、状态机、调用关系说明。
    - `log_baseline`：日志、指标、错误码的稳定基线。
 5. 按 design §3.4 的段落骨架组织正文；允许正文补充额外 heading，但 `section_credibility` 的 key 必须对应骨架段落。
-6. 填检索字段：`symptom_keywords`、`error_codes`、`log_signatures`、`aliases`。精确值只从原文摘录；拿不到就留空并写 `OPEN`。
-7. 准备 evidence：
+6. 起草 `summary`：一句话讲清楚这条知识的结论、根因或使用条件（≤200 字）。`title` 是短标签，`summary` 是完整一句话；不要用 KB 内部 LLM 自动生成，必须由执行 agent 起草并在提交前给人确认。
+7. 填检索字段：`symptom_keywords`、`error_codes`、`log_signatures`、`aliases`。精确值只从原文摘录；拿不到就留空并写 `OPEN`。
+8. 准备 evidence：
    - 运行日志、复现步骤、观测截图或测试输出：给 `log` / `repro` / `attachment` evidence。
    - 代码阅读推导：给 `code` evidence，至少包含 `filepath` 和 line/range。
    - 规范、设计文档、版本说明：给 `ref` evidence，包含来源和版本。
    - 历史相似案例：给既有 KB entry 或可追溯记录。
    - 只有模型推测时，明确标成假设，不伪装成事实。
-8. 调 `propose_entry` 或 `propose_update`。`request_id` 要稳定、可重试、可追踪。
-9. 读取返回值：
+9. 调 `propose_entry` 或 `propose_update`。`request_id` 要稳定、可重试、可追踪。
+10. 读取返回值：
    - 有 `warnings`：把降级、缺证据、字段修正写进你的回复，并按需补证据后重提。
    - 有 `errors`：不要绕过；按错误字段补齐信息或停止提交。
    - 返回 `review_level` 为 `light` / `heavy` 时，说明需要人工 review，不能当成已发布。

@@ -5,6 +5,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+SUMMARY_MAX_LENGTH = 200
+
 
 class EvidenceType(StrEnum):
     CODE = "code"
@@ -134,6 +136,7 @@ class Entry(StrictModel):
     schema_version: int
     entry_type: EntryType
     title: str
+    summary: str = Field(default="", max_length=SUMMARY_MAX_LENGTH)
     module: str
     credibility: Credibility
     trust_state: TrustState
@@ -165,9 +168,15 @@ class Entry(StrictModel):
             raise ValueError("schema_version must be 3")
         return value
 
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: object) -> object:
+        return normalize_summary_text(value)
+
 
 class EntryUpdate(StrictModel):
     title: str | None = None
+    summary: str | None = Field(default=None, max_length=SUMMARY_MAX_LENGTH)
     module: str | None = None
     tags: list[str] | None = None
     symptom_keywords: list[str] | None = None
@@ -179,3 +188,14 @@ class EntryUpdate(StrictModel):
     code_binding: CodeBinding | None = None
     related: list[RelatedEdge] | None = None
     body: str | None = None
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: object) -> object:
+        return normalize_summary_text(value)
+
+
+def normalize_summary_text(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    return " ".join(value.split())

@@ -23,10 +23,18 @@ from governed_api import (
 )
 from governed_api.roles import ADMIN_PERMISSION
 from governed_api.types import Middleware, MiddlewareContext, MiddlewareResult, fail, ok
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.id_allocator import IDAllocator
-from core.models import CodeBinding, Credibility, Entry, RelatedEdge, SectionCredibility
+from core.models import (
+    SUMMARY_MAX_LENGTH,
+    CodeBinding,
+    Credibility,
+    Entry,
+    RelatedEdge,
+    SectionCredibility,
+    normalize_summary_text,
+)
 from index import IndexUnavailable, SearchService
 from index.sqlite_index import read_valid_entries_from_source, read_valid_entry_file
 from index.types import SearchResult, SearchScope
@@ -79,6 +87,7 @@ class WebInputModel(BaseModel):
 class WebEntryCreateRequest(WebInputModel):
     entry_type: EntryTypeParam
     title: str = Field(min_length=1, max_length=240)
+    summary: str = Field(default="", max_length=SUMMARY_MAX_LENGTH)
     module: str = Field(min_length=1, max_length=120)
     credibility: Credibility
     body: str = Field(min_length=1)
@@ -97,9 +106,15 @@ class WebEntryCreateRequest(WebInputModel):
     trigger: str | None = None
     inferred_fields: list[str] = Field(default_factory=list)
 
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: object) -> object:
+        return normalize_summary_text(value)
+
 
 class WebEntryPatchRequest(WebInputModel):
     title: str | None = Field(default=None, min_length=1, max_length=240)
+    summary: str | None = Field(default=None, max_length=SUMMARY_MAX_LENGTH)
     module: str | None = Field(default=None, min_length=1, max_length=120)
     credibility: Credibility | None = None
     body: str | None = Field(default=None, min_length=1)
@@ -118,6 +133,11 @@ class WebEntryPatchRequest(WebInputModel):
     trigger: str | None = None
     inferred_fields: list[str] | None = None
     reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def normalize_summary(cls, value: object) -> object:
+        return normalize_summary_text(value)
 
 
 class WebReviewDecisionRequest(WebInputModel):
@@ -572,6 +592,7 @@ def _entry_summary(entry: Entry) -> dict[str, Any]:
     return {
         "id": entry.id,
         "title": entry.title,
+        "summary": entry.summary,
         "entry_type": entry.entry_type.value,
         "module": entry.module,
         "trust_state": entry.trust_state.value,

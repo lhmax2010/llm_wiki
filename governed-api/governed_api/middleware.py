@@ -78,6 +78,7 @@ AUTO_FIELDS = {"tags", "updated"}
 LIGHT_FIELDS = {
     "aliases",
     "title",
+    "summary",
     "module",
     "symptom_keywords",
     "error_codes",

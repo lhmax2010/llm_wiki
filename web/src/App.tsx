@@ -45,6 +45,7 @@ type EditorMode = "new" | "edit";
 type EditorState = {
   mode: EditorMode;
   title: string;
+  summary: string;
   module: string;
   entryType: string;
   body: string;
@@ -56,6 +57,7 @@ type EditorState = {
 const EMPTY_EDITOR: EditorState = {
   mode: "new",
   title: "",
+  summary: "",
   module: "",
   entryType: "defect_case",
   body: "",
@@ -160,6 +162,7 @@ function App() {
     setEditor({
       mode: "edit",
       title: selected.title,
+      summary: selected.summary ?? "",
       module: selected.module,
       entryType: selected.entry_type,
       body: selected.body,
@@ -807,6 +810,14 @@ function EntryEditor({
           />
         </label>
         <label>
+          Summary
+          <input
+            value={editor.summary}
+            onChange={(event) => setEditor({ ...editor, summary: event.target.value })}
+            maxLength={200}
+          />
+        </label>
+        <label>
           Type
           <select
             value={editor.entryType}
@@ -945,6 +956,13 @@ function EntryDetail({ entry }: { entry: Entry }) {
         </div>
       </dl>
 
+      {entry.summary && (
+        <section>
+          <h3>Summary</h3>
+          <p>{entry.summary}</p>
+        </section>
+      )}
+
       <section>
         <h3>Signals</h3>
         <TokenList values={[...entry.tags, ...entry.symptom_keywords, ...entry.error_codes]} />
@@ -1054,6 +1072,7 @@ function updatePayload(editor: EditorState): Partial<EntryWritePayload> {
 function sharedEditorPayload(editor: EditorState): Omit<EntryWritePayload, "entry_type"> {
   return {
     title: editor.title,
+    summary: editor.summary,
     module: editor.module,
     body: editor.body,
     tags: editor.tags

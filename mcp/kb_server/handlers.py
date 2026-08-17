@@ -292,6 +292,7 @@ def _entry_summary(entry: Entry) -> dict[str, Any]:
     return {
         "id": entry.id,
         "title": entry.title,
+        "summary": entry.summary,
         "entry_type": entry.entry_type.value,
         "module": entry.module,
         "trust_state": entry.trust_state.value,
