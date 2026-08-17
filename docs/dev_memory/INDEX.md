@@ -6,7 +6,7 @@
 
 - Active phase: `none`
 - Last merged phase: `phase_8c_review_detail_diff`
-- Last maintenance checkpoint: `checkpoint/summary-field`
+- Last maintenance checkpoint: `checkpoint/credibility-preserve-web-edit`
 
 ## Phases
 
@@ -33,5 +33,6 @@
 | 2026-07-10 | p5-index-sync | Merged | `docs/dev_memory/phase_5_staging_review/` | https://github.com/lhmax2010/llm_wiki/pull/14 | 0ec9e10 (merge), 9282f31 (PR head/docs), d3889ba (code) |
 | 2026-07-13 | graph-force-layout | Merged | `docs/dev_memory/phase_7b_graph/` | https://github.com/lhmax2010/llm_wiki/pull/15 | be6946e (merge), 4481746 (PR head/docs), c03f806 (code) |
 | 2026-08-17 | summary-field | Merged | `docs/dev_memory/summary_field/` | https://github.com/lhmax2010/llm_wiki/pull/16 | f71d8c9 (merge), 215a4bb (PR head/docs), 934e90f (code) |
+| 2026-08-17 | credibility-preserve-web-edit | Merged | `docs/dev_memory/credibility_preserve_web_edit/` | https://github.com/lhmax2010/llm_wiki/pull/17 | MERGE_SHA (merge), DOCS_SHA (PR head/docs), c0cd6ea (FIX-2 backend), aef2677 (FIX-1 frontend) |
 
 Status vocabulary: 进行中 / 待 Review / 已 Merge / 已 Skip.
