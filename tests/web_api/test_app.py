@@ -563,6 +563,173 @@ def test_web_propose_update_persists_to_staging_and_keeps_published_entry(
     assert proposal.summary == "Published entry now has a concise update summary."
 
 
+def test_web_patch_unrelated_field_preserves_published_credibility(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    """B4: editing title must not touch the trust verdict or drop evidence."""
+    kb_root = tmp_path / "kb"
+    _seed_fact_weak_entry(tmp_path)
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"title": "Decoder failure on 8K input"},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    proposal = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    assert proposal.title == "Decoder failure on 8K input"
+    published = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert proposal.credibility.claim_type == published.credibility.claim_type
+    assert proposal.credibility.support_strength == published.credibility.support_strength
+    assert proposal.credibility.evidence == published.credibility.evidence
+    assert proposal.credibility.claim_type.value == "fact"
+    assert proposal.credibility.support_strength.value == "weak"
+    assert len(proposal.credibility.evidence) == 3
+    assert [item.type.value for item in proposal.credibility.evidence] == [
+        "log",
+        "human_note",
+        "ticket",
+    ]
+
+
+def test_web_patch_unrelated_field_does_not_inflate_support_strength(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    """B5: support_strength must never be silently upgraded by an unrelated edit.
+
+    Kept separate from B4 on purpose: an inflated trust verdict is the most
+    dangerous failure mode here, so it gets an assertion whose failure message
+    points straight at it.
+    """
+    kb_root = tmp_path / "kb"
+    _seed_fact_weak_entry(tmp_path)
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"title": "Decoder failure on 8K input"},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 200
+    proposal = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    assert proposal.credibility.support_strength.value != "strong"
+    assert proposal.credibility.support_strength.value == "weak"
+
+
+def test_web_patch_partial_credibility_merges_sub_fields(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    """B6: sub-fields the caller omits keep their published value."""
+    kb_root = tmp_path / "kb"
+    _seed_fact_weak_entry(tmp_path)
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"credibility": {"support_strength": "moderate"}},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 200
+    proposal = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    assert proposal.credibility.support_strength.value == "moderate"
+    assert proposal.credibility.claim_type.value == "fact"
+    assert len(proposal.credibility.evidence) == 3
+
+
+def test_web_patch_credibility_replaces_evidence_list_as_a_whole(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    """B7: a supplied evidence list replaces the old one; no item-level merge."""
+    kb_root = tmp_path / "kb"
+    _seed_fact_weak_entry(tmp_path)
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={
+            "credibility": {
+                "claim_type": "observation",
+                "evidence": [{"type": "human_note", "excerpt": "Replacement note."}],
+            }
+        },
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 200
+    proposal = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    assert len(proposal.credibility.evidence) == 1
+    assert proposal.credibility.evidence[0].excerpt == "Replacement note."
+    assert proposal.credibility.claim_type.value == "observation"
+    assert proposal.credibility.support_strength.value == "weak"
+
+
+def test_web_patch_empty_credibility_object_changes_nothing(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    """B8: ``{"credibility": {}}`` is a no-op, not a wipe."""
+    kb_root = tmp_path / "kb"
+    _seed_fact_weak_entry(tmp_path)
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"credibility": {}, "tags": ["decoder"]},
+        headers=WRITE_HEADERS,
+    )
+
+    assert response.status_code == 200
+    proposal = read_entry(kb_root / "staging" / "KB-2026-0001.md")
+    published = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert proposal.credibility == published.credibility
+
+
+def test_web_patch_review_approve_preserves_credibility_end_to_end(
+    tmp_path: Path,
+    roles_config: RolesConfig,
+) -> None:
+    """B9: the full governed path -- PATCH title, heavy review, approve.
+
+    This is the assertion that matters: it proves the published entry survives
+    the whole pipeline (merge -> validate -> stage -> reviewer approve) with its
+    trust verdict and evidence byte-for-byte intact.
+    """
+    kb_root = tmp_path / "kb"
+    _seed_fact_weak_entry(tmp_path)
+    before = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    client = TestClient(create_app(repo_root=tmp_path, kb_root=kb_root, roles_config=roles_config))
+
+    patch_response = client.patch(
+        "/api/entries/KB-2026-0001",
+        json={"title": "Decoder failure on 8K input"},
+        headers=WRITE_HEADERS,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["review_level"] == "heavy"
+
+    approve_response = client.post(
+        "/api/review/KB-2026-0001/approve",
+        json={},
+        headers=REVIEW_HEADERS,
+    )
+
+    assert approve_response.status_code == 200
+    after = read_entry(kb_root / "entries" / "KB-2026-0001.md")
+    assert after.title == "Decoder failure on 8K input"
+    assert after.credibility == before.credibility
+    assert after.credibility.support_strength.value == "weak"
+    assert len(after.credibility.evidence) == 3
+
+
 def test_web_propose_entry_rejects_overlong_summary(
     tmp_path: Path,
     roles_config: RolesConfig,
@@ -1258,6 +1425,33 @@ def test_web_review_permissions_and_trust_boundary_attacks(
 
 def _write_payload(path: Path, payload: dict[str, Any]) -> None:
     write_entry(path, Entry.model_validate(payload))
+
+
+def _seed_fact_weak_entry(repo_root: Path) -> dict[str, Any]:
+    """Publish a fact/weak entry carrying three evidence items of mixed type.
+
+    fact/weak is the shape that exposes credibility corruption most sharply:
+    a wholesale replace both inflates support_strength and drops the non
+    human_note evidence. The log attachment has to exist on disk or
+    ``validate_entry`` rejects it with E_EVIDENCE_NOT_FOUND, and it is also
+    what entitles the entry to claim_type ``fact`` instead of being downgraded.
+    """
+    attachment = repo_root / "kb" / "attachments" / "decoder-crash.log"
+    attachment.parent.mkdir(parents=True, exist_ok=True)
+    attachment.write_text("decoder crash trace\n", encoding="utf-8")
+
+    payload = entry_payload(entry_id="KB-2026-0001", trust_state="published")
+    payload["credibility"] = {
+        "claim_type": "fact",
+        "support_strength": "weak",
+        "evidence": [
+            {"type": "log", "attachment_id": "decoder-crash.log"},
+            {"type": "human_note", "excerpt": "Observed by reviewer."},
+            {"type": "ticket", "ref": "JIRA-4821"},
+        ],
+    }
+    _write_payload(repo_root / "kb" / "entries" / "KB-2026-0001.md", payload)
+    return payload
 
 
 def _write_research(kb_root: Path, research_id: str, *, title: str) -> None:

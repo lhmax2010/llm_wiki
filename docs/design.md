@@ -316,6 +316,15 @@ search_research_for_hints(query): { research_signals: [...] }
 
 #### 4.1.2 HTTP API（Web 入口）
 
+🟢 **PATCH /api/entries/:id 的合并语义（v1.5）**：顶层字段整体替换；**唯独 `credibility` 按子字段合并** —— patch 未携带的子字段保留已发布值。理由：`credibility` 是条目的信任裁决（`claim_type` / `support_strength`）加其支撑 `evidence`，整体替换会让任何"只想改标题"的调用方顺带把证据削掉、把 `support_strength` 抬高。子字段合并堵掉这条通道。
+
+**边界（明确不深合并，仍是整体替换）**：
+- `section_credibility`（段落级裁决 dict）
+- `code_binding`
+- `credibility.evidence` 列表本身 —— 携带 `evidence` 即整体替换该列表。evidence 条目没有稳定 id，逐项合并无法安全实现。传 `[]` 是显式清空,省略 `evidence` 才是保留。
+
+实现见 `web_api/service.py::_merge_patch_into_payload`；扩大范围必须同步扩 `tests/web_api/test_app.py` 的对应用例。配套地,PATCH 的 `credibility` 用 `CredibilityPatch`（三个子字段全可选），与 create 路径要求完整 `Credibility` 不同 —— 只改标题的调用方不应被迫复述信任裁决，因为复述正是它被篡改的途径。
+
 ```
 GET  /api/entries?scope=...           # 人读搜索（human_search_index）
 GET  /api/entries/:id                 # 完整结构化 JSON（前端隐藏技术字段渲染）

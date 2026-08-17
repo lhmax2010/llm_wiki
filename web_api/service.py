@@ -28,11 +28,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from core.id_allocator import IDAllocator
 from core.models import (
     SUMMARY_MAX_LENGTH,
+    ClaimType,
     CodeBinding,
     Credibility,
     Entry,
+    Evidence,
     RelatedEdge,
     SectionCredibility,
+    SupportStrength,
     normalize_summary_text,
 )
 from index import IndexUnavailable, SearchService
@@ -112,11 +115,26 @@ class WebEntryCreateRequest(WebInputModel):
         return normalize_summary_text(value)
 
 
+class CredibilityPatch(WebInputModel):
+    """PATCH-only credibility: every sub-field is optional.
+
+    An omitted sub-field means "keep the published value" -- see
+    ``_merge_patch_into_payload``. This is deliberately looser than
+    :class:`Credibility` (used on create, where the full verdict is required):
+    a caller that only wants to change ``title`` must not be forced to restate
+    the credibility verdict, because restating it is how it gets corrupted.
+    """
+
+    claim_type: ClaimType | None = None
+    support_strength: SupportStrength | None = None
+    evidence: list[Evidence] | None = None
+
+
 class WebEntryPatchRequest(WebInputModel):
     title: str | None = Field(default=None, min_length=1, max_length=240)
     summary: str | None = Field(default=None, max_length=SUMMARY_MAX_LENGTH)
     module: str | None = Field(default=None, min_length=1, max_length=120)
-    credibility: Credibility | None = None
+    credibility: CredibilityPatch | None = None
     body: str | None = Field(default=None, min_length=1)
     tags: list[str] | None = None
     symptom_keywords: list[str] | None = None
@@ -344,7 +362,7 @@ class WebWriteService:
         now = _utc_now()
         patch = request.model_dump(mode="json", exclude_none=True, exclude={"reason"})
         payload = previous_entry.model_dump(mode="json")
-        payload.update(patch)
+        _merge_patch_into_payload(payload, patch)
         payload.update(
             {
                 "id": entry_id,
@@ -580,6 +598,37 @@ def _state_root(kb_root: Path, dirname: Literal["entries", "staging"]) -> Path:
     if not resolved.is_relative_to(root):
         raise WebApiError("E_SCHEMA", f"{dirname} directory escapes kb root", "kb_root")
     return resolved
+
+
+def _merge_patch_into_payload(payload: dict[str, Any], patch: dict[str, Any]) -> None:
+    """Merge a PATCH body into the published payload, in place.
+
+    Top-level fields are replaced wholesale. ``credibility`` is the sole
+    exception: it merges at sub-field level, so a sub-field the caller did not
+    send keeps its published value instead of being silently reset.
+
+    Why credibility is special-cased: it is the trust verdict of the entry
+    (``claim_type`` / ``support_strength``) plus its supporting ``evidence``.
+    A wholesale replace lets any caller that restates a partial credibility --
+    or restates it from a form that cannot represent the full structure --
+    downgrade evidence or inflate support_strength as a side effect of editing
+    an unrelated field. Sub-field merging removes that channel.
+
+    BOUNDARY -- deliberately NOT deep-merged, still whole-value replaces:
+      * ``section_credibility``  (dict of per-section verdicts)
+      * ``code_binding``
+      * the ``evidence`` list itself: sending ``evidence`` replaces the whole
+        list. Evidence items have no stable identity, so item-level merging
+        cannot be done safely. Sending ``[]`` is an explicit clear; omitting
+        ``evidence`` is what preserves it.
+    Do not widen this without also widening the tests in
+    ``tests/web_api/test_app.py`` -- see docs/design.md.
+    """
+    rest = {key: value for key, value in patch.items() if key != "credibility"}
+    payload.update(rest)
+    credibility_patch = patch.get("credibility")
+    if credibility_patch:
+        payload["credibility"] = {**payload["credibility"], **credibility_patch}
 
 
 def _validate_kb_id(entry_id: str) -> None:
