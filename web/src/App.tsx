@@ -51,7 +51,10 @@ type EditorState = {
   body: string;
   tags: string;
   related: string;
+  // On create, the author's evidence note. On edit, a read-only rendering of
+  // the published evidence -- it is never sent back, see updatePayload().
   evidence: string;
+  evidenceCount: number;
 };
 
 const EMPTY_EDITOR: EditorState = {
@@ -63,7 +66,8 @@ const EMPTY_EDITOR: EditorState = {
   body: "",
   tags: "",
   related: "",
-  evidence: ""
+  evidence: "",
+  evidenceCount: 0
 };
 const SEARCH_PAGE_SIZE = 100;
 
@@ -168,7 +172,8 @@ function App() {
       body: selected.body,
       tags: selected.tags.join(", "),
       related: relatedText(selected),
-      evidence: evidenceText(selected)
+      evidence: evidenceText(selected),
+      evidenceCount: selected.credibility.evidence.length
     });
   }
 
@@ -847,14 +852,30 @@ function EntryEditor({
         />
       </label>
 
-      <label className="editor-block">
-        Evidence
-        <textarea
-          value={editor.evidence}
-          onChange={(event) => setEditor({ ...editor, evidence: event.target.value })}
-          required
-        />
-      </label>
+      {editor.mode === "edit" ? (
+        <div className="editor-block">
+          <label>
+            Evidence
+            <textarea className="evidence-readonly" value={editor.evidence} readOnly />
+          </label>
+          <p className="muted">
+            {editor.evidenceCount > 0
+              ? `Read-only. This edit preserves all ${editor.evidenceCount} evidence item(s) and the entry's claim_type / support_strength unchanged.`
+              : "Read-only. This entry has no evidence; this edit leaves it and the entry's claim_type / support_strength unchanged."}{" "}
+            Evidence and credibility are not editable from the web form — use the MCP or CLI path
+            to change them.
+          </p>
+        </div>
+      ) : (
+        <label className="editor-block">
+          Evidence
+          <textarea
+            value={editor.evidence}
+            onChange={(event) => setEditor({ ...editor, evidence: event.target.value })}
+            required
+          />
+        </label>
+      )}
 
       <label className="editor-block">
         Body
@@ -1061,15 +1082,32 @@ function TokenList({ values }: { values: string[] }) {
 function createPayload(editor: EditorState): EntryWritePayload {
   return {
     ...sharedEditorPayload(editor),
-    entry_type: editor.entryType
+    entry_type: editor.entryType,
+    // Create is the only path that may set the trust verdict, because there is
+    // no published entry to inherit one from. The author's note becomes the
+    // single starting piece of evidence; reviewers refine it from there.
+    credibility: {
+      claim_type: "observation",
+      support_strength: "strong",
+      evidence: [{ type: "human_note", excerpt: editor.evidence }]
+    }
   };
 }
 
 function updatePayload(editor: EditorState): Partial<EntryWritePayload> {
+  // Deliberately omits `credibility`. This form cannot represent a list of
+  // structured Evidence, and it has no basis for a claim_type/support_strength
+  // verdict, so it must not send one: anything it sent would overwrite the
+  // published verdict with a guess. Omitting the key entirely -- rather than
+  // echoing the values read at load time -- also avoids clobbering a
+  // concurrent edit with stale values. The backend keeps the published
+  // credibility when the key is absent (web_api/service.py).
   return sharedEditorPayload(editor);
 }
 
-function sharedEditorPayload(editor: EditorState): Omit<EntryWritePayload, "entry_type"> {
+function sharedEditorPayload(
+  editor: EditorState
+): Omit<EntryWritePayload, "entry_type" | "credibility"> {
   return {
     title: editor.title,
     summary: editor.summary,
@@ -1079,12 +1117,7 @@ function sharedEditorPayload(editor: EditorState): Omit<EntryWritePayload, "entr
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean),
-    related: parseRelated(editor.related),
-    credibility: {
-      claim_type: "observation",
-      support_strength: "strong",
-      evidence: [{ type: "human_note", excerpt: editor.evidence }]
-    }
+    related: parseRelated(editor.related)
   };
 }
 
@@ -1117,11 +1150,10 @@ function relatedText(entry: Entry) {
 }
 
 function evidenceText(entry: Entry) {
-  const evidence = entry.credibility.evidence[0];
-  if (!evidence) {
-    return "";
-  }
-  return String(evidence.excerpt ?? evidence.ref ?? evidence.uri ?? evidence.filepath ?? "");
+  // One line per item, every item -- the editor shows this read-only so the
+  // author can see exactly what the edit is preserving. evidenceSummary()
+  // handles every evidence shape, unlike a per-key lookup.
+  return entry.credibility.evidence.map((item) => evidenceSummary(item)).join("\n");
 }
 
 function relatedSummary(item: { target?: string | null; type?: string | null; note?: string | null }) {

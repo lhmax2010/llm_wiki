@@ -40,6 +40,31 @@
   from the published entry and `review_route` converts the proposal to pending;
   this is correct but easy to misread.
 
+## Credibility Integrity
+
+- [ ] Structured evidence entry UI for the Web edit form. PR #17 made the edit
+  form stop sending `credibility` at all, because a single textarea cannot
+  represent `list[Evidence]` and the form has no basis for a
+  `claim_type`/`support_strength` verdict. The consequence is that evidence is
+  currently not editable from the Web; use MCP or CLI. The root fix is a
+  structured editor (per-item type + type-specific fields). The backend is
+  already ready for it: `_merge_patch_into_payload` accepts
+  `{"credibility": {"evidence": [...]}}` and merges sub-field-wise, so this
+  needs no further backend change.
+- [ ] Audit the MCP and other write paths for the same shallow-merge defect
+  PR #17 fixed in the Web path. `propose_update_from_web` is web-only and MCP
+  handlers do not reuse it, so PR #17 did not touch them, but the pattern
+  (`payload.update(patch)` over a previously published entry) may be repeated.
+  Check specifically whether any path lets a partial `credibility` — or a
+  `credibility` with an omitted `evidence` defaulting to `[]` — replace a
+  published verdict.
+- [ ] Consider extending sub-field merging to `section_credibility` and
+  `code_binding` on PATCH. Both are still whole-value replaces, which is the
+  same class of risk as the credibility bug. Left out of PR #17 deliberately to
+  keep the blast radius small; the boundary is documented in
+  `_merge_patch_into_payload` and `docs/design.md` §4.1.2 so it is not mistaken
+  for a general deep merge.
+
 ## Web Review Hardening
 
 - [ ] For future proposal subtypes, add paired approve/reject lifecycle tests
