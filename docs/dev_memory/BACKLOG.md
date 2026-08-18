@@ -40,6 +40,21 @@
   from the published entry and `review_route` converts the proposal to pending;
   this is correct but easy to misread.
 
+## Tooling Consistency
+
+- [ ] Give `scripts/rebuild_indexes.py` the same `sys.path` bootstrap that
+  `scripts/build_module_views.py` uses. Running it as plain
+  `python scripts/rebuild_indexes.py` fails with
+  `ModuleNotFoundError: No module named 'index'`, because direct script
+  invocation puts `scripts/` on `sys.path` rather than the repo root; it only
+  works under `uv run`. `scripts/validate_skills.py` is stdlib-only today, so
+  it is unaffected, but it would hit the same wall the moment it imports from
+  the project.
+- [ ] Update `docs/DEPLOYMENT.md:127` when the above lands. It documents
+  `uv run python scripts/rebuild_indexes.py --kb-root kb`, which is correct
+  today but should be simplified alongside the bootstrap so the docs and the
+  scripts agree on one invocation style.
+
 ## Credibility Integrity
 
 - [ ] Structured evidence entry UI for the Web edit form. PR #17 made the edit
