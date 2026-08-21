@@ -194,7 +194,7 @@ class SearchService:
         offset: int = 0,
         sort: str = "score",
     ) -> list[SearchResult]:
-        indexed = self.agent_index.read_entries(self.kb_root)
+        indexed = self.agent_index.read_entries(self.kb_root, scope=scope)
         entries = [item.entry for item in indexed]
         if include_pending:
             entries.extend(self._read_source_entries(PENDING_DIR))
@@ -219,7 +219,7 @@ class SearchService:
         offset: int = 0,
         sort: str = "score",
     ) -> list[SearchResult]:
-        indexed = self.human_index.read_entries(self.kb_root)
+        indexed = self.human_index.read_entries(self.kb_root, scope=scope)
         return _search_entries(
             [item.entry for item in indexed],
             kb_root=self.kb_root,

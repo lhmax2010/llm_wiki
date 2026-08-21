@@ -1,10 +1,10 @@
 """SQLite path catalog for Phase 4 search.
 
 P4 uses SQLite to persist a rebuildable list of validated entry paths per search
-index. Query-time filtering intentionally stays in Python so synonyms, CJK
-bigram matching, and section support passthrough share one correctness path.
-SQL-level acceleration is a future optimization once the search surface grows
-beyond the V1 thousand-entry budget.
+index. Query-time correctness stays in Python so synonyms, CJK bigram matching,
+and section support passthrough share one path. SQLite may prefilter candidate
+paths for simple metadata such as module/entry_type, but every candidate is
+still re-read and rechecked by Python before it can be returned.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from core.models import Entry
 from core.storage import read_entry
 from core.validation import validate_entry
+from index.types import SearchScope
 
 LOGGER = logging.getLogger(__name__)
 RESEARCH_DIR = "research"
@@ -128,9 +129,9 @@ class SQLiteMetadataIndex:
                 connection.executemany(
                     """
                     INSERT INTO entries(
-                        id, path, source_dir
+                        id, path, source_dir, module, entry_type
                     )
-                    VALUES (?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
                     [_row_for_entry(item, kb_root) for item in entries],
                 )
@@ -183,15 +184,35 @@ class SQLiteMetadataIndex:
             indexed=indexed,
         )
 
-    def read_entries(self, kb_root: Path) -> list[IndexedEntry]:
+    def read_entries(
+        self,
+        kb_root: Path,
+        *,
+        scope: SearchScope | None = None,
+        allow_pushdown: bool = True,
+    ) -> list[IndexedEntry]:
         if not self.db_path.is_file():
             raise IndexUnavailable(f"index is not built: {self.name}")
+        pushdown_filters = _pushdown_filters(scope or {}) if allow_pushdown else {}
+        use_pushdown = False
+        if pushdown_filters:
+            use_pushdown = self._can_push_down(kb_root)
+            if use_pushdown and self._is_stale(kb_root):
+                LOGGER.warning(
+                    "%s is stale; falling back to full source scan for scoped search",
+                    self.name,
+                )
+                return self._read_source_entries(kb_root)
+            if not use_pushdown:
+                LOGGER.warning(
+                    "%s cannot push down scoped search; falling back to full source scan",
+                    self.name,
+                )
+                return self._read_source_entries(kb_root)
         try:
             with closing(sqlite3.connect(self.db_path)) as connection:
                 connection.row_factory = sqlite3.Row
-                rows = connection.execute(
-                    "SELECT path, source_dir FROM entries ORDER BY id"
-                ).fetchall()
+                rows = _select_entry_rows(connection, pushdown_filters if use_pushdown else {})
         except sqlite3.Error as exc:
             raise IndexUnavailable(f"index is unreadable: {self.name}") from exc
 
@@ -210,6 +231,36 @@ class SQLiteMetadataIndex:
                 raise IndexUnavailable(f"index has invalid source_dir: {source_dir}") from exc
             if item is not None:
                 entries.append(item)
+        return entries
+
+    def _can_push_down(self, kb_root: Path) -> bool:
+        try:
+            with closing(sqlite3.connect(self.db_path)) as connection:
+                entries_columns = _table_columns(connection, "entries")
+                meta_columns = _table_columns(connection, "index_meta")
+        except sqlite3.Error as exc:
+            raise IndexUnavailable(f"index is unreadable: {self.name}") from exc
+        has_filter_columns = {"module", "entry_type"}.issubset(entries_columns)
+        has_freshness_columns = {"scanned_count", "max_mtime_ns"}.issubset(meta_columns)
+        if not has_filter_columns or not has_freshness_columns:
+            return False
+        try:
+            status = self.freshness_status(kb_root)
+        except ValueError as exc:
+            raise IndexUnavailable(f"invalid index source dir: {self.name}") from exc
+        return status.supported
+
+    def _is_stale(self, kb_root: Path) -> bool:
+        status = self.freshness_status(kb_root)
+        return status.stale
+
+    def _read_source_entries(self, kb_root: Path) -> list[IndexedEntry]:
+        entries: list[IndexedEntry] = []
+        for source_dir in self.source_dirs:
+            source_entries, _ = read_valid_entries_from_source(
+                kb_root, source_dir, context=f"{self.name} direct freshness fallback"
+            )
+            entries.extend(source_entries)
         return entries
 
     def indexed_paths(self) -> list[str]:
@@ -239,16 +290,18 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS entries(
             id TEXT PRIMARY KEY,
             path TEXT NOT NULL,
-            source_dir TEXT NOT NULL
+            source_dir TEXT NOT NULL,
+            module TEXT NOT NULL,
+            entry_type TEXT NOT NULL
         )
         """
     )
 
 
-def _row_for_entry(item: IndexedEntry, kb_root: Path) -> tuple[str, str, str]:
+def _row_for_entry(item: IndexedEntry, kb_root: Path) -> tuple[str, str, str, str, str]:
     entry = item.entry
     relative_path = item.path.resolve().relative_to(kb_root.resolve()).as_posix()
-    return (entry.id, relative_path, item.source_dir)
+    return (entry.id, relative_path, item.source_dir, entry.module, entry.entry_type.value)
 
 
 def read_valid_entries_from_source(
@@ -370,3 +423,33 @@ def _combine_freshness(freshnesses: Iterable[IndexFreshness]) -> IndexFreshness:
 def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {str(row[1]) for row in rows}
+
+
+def _pushdown_filters(scope: SearchScope) -> dict[str, str]:
+    filters: dict[str, str] = {}
+    module = scope.get("module")
+    if module is not None:
+        filters["module"] = module
+    entry_type = scope.get("entry_type")
+    if entry_type is not None:
+        filters["entry_type"] = entry_type
+    return filters
+
+
+def _select_entry_rows(
+    connection: sqlite3.Connection,
+    filters: dict[str, str],
+) -> list[sqlite3.Row]:
+    clauses: list[str] = []
+    params: list[str] = []
+    if "module" in filters:
+        clauses.append("module = ?")
+        params.append(filters["module"])
+    if "entry_type" in filters:
+        clauses.append("entry_type = ?")
+        params.append(filters["entry_type"])
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    return connection.execute(
+        f"SELECT path, source_dir FROM entries{where} ORDER BY id",
+        params,
+    ).fetchall()

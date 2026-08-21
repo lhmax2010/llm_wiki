@@ -8,10 +8,14 @@ from typing import Any
 
 import pytest
 
-from core.models import Entry
-from core.storage import write_entry
+import index.search as search_module
+import index.sqlite_index as sqlite_index_module
+from core.models import Entry, EntryType
+from core.storage import read_entry, write_entry
+from core.validation import headings_for_entry_type
 from index.search import SearchService
-from index.sqlite_index import IndexUnavailable, SQLiteMetadataIndex
+from index.sqlite_index import IndexUnavailable, SQLiteMetadataIndex, read_valid_entry_file
+from index.types import SearchResult, SearchScope
 from research.store import ResearchRecord, write_research_record
 from tests.governed_api.helpers import body_for, entry_payload
 
@@ -314,6 +318,226 @@ def test_scope_error_code_exact_match_filters_results(tmp_path: Path) -> None:
     assert [result["id"] for result in results] == ["KB-2026-0001"]
 
 
+def test_module_and_entry_type_pushdown_matches_python_filter_matrix(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    for number, module, entry_type in (
+        (1, "photo", "defect_case"),
+        (2, "photo", "triage_rule"),
+        (3, "decoder", "defect_case"),
+        (4, "decoder", "log_baseline"),
+    ):
+        payload = entry_payload(
+            entry_id=f"KB-2026-{number:04d}",
+            trust_state="published",
+            title=f"scope-token {module} {entry_type}",
+            body=body_for(entry_type),
+        )
+        payload["module"] = module
+        payload["entry_type"] = entry_type
+        if number == 2:
+            payload["credibility"]["support_strength"] = "weak"
+            payload["section_credibility"] = {
+                headings_for_entry_type(EntryType.TRIAGE_RULE)[0]: {
+                    "claim_type": "observation",
+                    "support_strength": "strong",
+                    "evidence": [],
+                }
+            }
+        _write_payload(kb_root, "entries", payload)
+    service.rebuild_agent_index()
+
+    scopes: list[SearchScope] = [
+        {},
+        {"module": "photo"},
+        {"entry_type": "triage_rule"},
+        {"module": "photo", "entry_type": "triage_rule"},
+        {"module": "photo", "min_support": "strong"},
+    ]
+    for scope in scopes:
+        assert _indexed_search(service, scope=scope, allow_pushdown=True) == _indexed_search(
+            service, scope=scope, allow_pushdown=False
+        )
+
+
+def test_stale_scoped_search_falls_back_to_source_scan_and_warns(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    payload = entry_payload(
+        entry_id="KB-2026-0001",
+        trust_state="published",
+        title="stale-token changed module",
+    )
+    payload["module"] = "decoder"
+    _write_payload(kb_root, "entries", payload)
+    path = kb_root / "entries" / "KB-2026-0001.md"
+    service.rebuild_agent_index()
+    old_mtime_ns = path.stat().st_mtime_ns
+
+    payload["module"] = "photo"
+    write_entry(path, Entry.model_validate(payload))
+    updated_mtime_ns = old_mtime_ns + 1_000_000_000
+    os.utime(path, ns=(updated_mtime_ns, updated_mtime_ns))
+
+    results = service.search_agent(
+        "stale-token",
+        scope={"module": "photo"},
+        expand_synonyms=False,
+    )
+
+    assert [result["id"] for result in results] == ["KB-2026-0001"]
+    assert "agent_search_index is stale" in caplog.text
+    assert "falling back to full source scan" in caplog.text
+
+
+def test_python_scope_recheck_prevents_stale_pushdown_false_positive(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    for number in (1, 2):
+        payload = entry_payload(
+            entry_id=f"KB-2026-{number:04d}",
+            trust_state="published",
+            title="subset-token shared",
+        )
+        payload["module"] = "photo"
+        _write_payload(kb_root, "entries", payload)
+    service.rebuild_agent_index()
+
+    stale_payload = entry_payload(
+        entry_id="KB-2026-0001",
+        trust_state="published",
+        title="subset-token shared",
+    )
+    stale_payload["module"] = "audio"
+    stale_path = kb_root / "entries" / "KB-2026-0001.md"
+    write_entry(stale_path, Entry.model_validate(stale_payload))
+
+    with closing(sqlite3.connect(service.agent_index.db_path)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = sqlite_index_module._select_entry_rows(connection, {"module": "photo"})
+    stale_candidates = []
+    for row in rows:
+        item = read_valid_entry_file(
+            kb_root,
+            str(row["source_dir"]),
+            kb_root / str(row["path"]),
+            context="stale pushdown simulation",
+        )
+        assert item is not None
+        stale_candidates.append(item.entry)
+
+    stale_sql_results = search_module._search_entries(
+        stale_candidates,
+        kb_root=kb_root,
+        query="subset-token",
+        scope={"module": "photo"},
+        expand_synonyms=False,
+        limit=20,
+        offset=0,
+        sort="score",
+    )
+    python_results = _indexed_search(
+        service,
+        scope={"module": "photo"},
+        allow_pushdown=False,
+        query="subset-token",
+    )
+
+    assert {result["id"] for result in stale_sql_results}.issubset(
+        {result["id"] for result in python_results}
+    )
+    assert all(result["module"] == "photo" for result in stale_sql_results)
+    assert [result["id"] for result in stale_sql_results] == ["KB-2026-0002"]
+
+
+def test_old_index_schema_scoped_search_falls_back_to_source_scan(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    photo = entry_payload(
+        entry_id="KB-2026-0001",
+        trust_state="published",
+        title="legacy-token photo",
+    )
+    photo["module"] = "photo"
+    decoder = entry_payload(
+        entry_id="KB-2026-0002",
+        trust_state="published",
+        title="legacy-token decoder",
+    )
+    decoder["module"] = "decoder"
+    _write_payload(kb_root, "entries", photo)
+    _write_payload(kb_root, "entries", decoder)
+    db_path = service.agent_index.db_path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(db_path)) as connection:
+        connection.execute(
+            "CREATE TABLE index_meta("
+            "name TEXT PRIMARY KEY, status TEXT NOT NULL, indexed_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO index_meta(name, status, indexed_at) VALUES (?, ?, ?)",
+            ("agent_search_index", "ready", "2026-06-16T00:00:00+00:00"),
+        )
+        connection.execute(
+            "CREATE TABLE entries("
+            "id TEXT PRIMARY KEY, path TEXT NOT NULL, source_dir TEXT NOT NULL)"
+        )
+        connection.commit()
+
+    results = service.search_agent(
+        "legacy-token",
+        scope={"module": "photo"},
+        expand_synonyms=False,
+    )
+
+    assert [result["id"] for result in results] == ["KB-2026-0001"]
+
+
+def test_module_pushdown_reads_only_matching_module_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    for number, module in (
+        (1, "photo"),
+        (2, "photo"),
+        (3, "decoder"),
+        (4, "decoder"),
+        (5, "audio"),
+    ):
+        payload = entry_payload(
+            entry_id=f"KB-2026-{number:04d}",
+            trust_state="published",
+            title=f"read-count-token {module}",
+        )
+        payload["module"] = module
+        _write_payload(kb_root, "entries", payload)
+    service.rebuild_agent_index()
+    calls = 0
+    real_read_entry = read_entry
+
+    def counted_read_entry(path: Path) -> Entry:
+        nonlocal calls
+        calls += 1
+        return real_read_entry(path)
+
+    monkeypatch.setattr("index.sqlite_index.read_entry", counted_read_entry)
+
+    results = service.search_agent(
+        "read-count-token",
+        scope={"module": "photo"},
+        expand_synonyms=False,
+        limit=10,
+    )
+
+    assert {result["id"] for result in results} == {"KB-2026-0001", "KB-2026-0002"}
+    assert calls == 2
+
+
 def test_summary_matches_with_priority_between_title_and_error_code(tmp_path: Path) -> None:
     kb_root = tmp_path / "kb"
     title_hit = entry_payload(
@@ -468,6 +692,30 @@ def _write_synonyms(kb_root: Path) -> None:
     (kb_root / "synonyms.jsonl").write_text(
         '{"canonical": "花屏", "synonyms": ["绿屏", "画面错乱"]}\n',
         encoding="utf-8",
+    )
+
+
+def _indexed_search(
+    service: SearchService,
+    *,
+    scope: SearchScope,
+    allow_pushdown: bool,
+    query: str = "scope-token",
+) -> list[SearchResult]:
+    indexed = service.agent_index.read_entries(
+        service.kb_root,
+        scope=scope,
+        allow_pushdown=allow_pushdown,
+    )
+    return search_module._search_entries(
+        [item.entry for item in indexed],
+        kb_root=service.kb_root,
+        query=query,
+        scope=scope,
+        expand_synonyms=False,
+        limit=20,
+        offset=0,
+        sort="score",
     )
 
 
