@@ -10,8 +10,10 @@ beyond the V1 thousand-entry budget.
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import uuid
+from collections.abc import Iterable
 from contextlib import closing, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -47,6 +49,33 @@ class IndexedEntry:
 
 
 @dataclass(frozen=True, slots=True)
+class IndexFreshness:
+    scanned_count: int
+    max_mtime_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class IndexFreshnessStatus:
+    supported: bool
+    stale: bool
+    current: IndexFreshness
+    indexed: IndexFreshness | None
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFile:
+    path: Path
+    mtime_ns: int
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSnapshot:
+    files: tuple[SourceFile, ...]
+    freshness: IndexFreshness
+
+
+@dataclass(frozen=True, slots=True)
 class SQLiteMetadataIndex:
     """Rebuildable SQLite path index backed by validated markdown Entry files."""
 
@@ -63,20 +92,38 @@ class SQLiteMetadataIndex:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         entries: list[IndexedEntry] = []
         skipped = 0
+        source_snapshots: list[SourceSnapshot] = []
         for source_dir in self.source_dirs:
-            source_entries, source_skipped = read_valid_entries_from_source(
-                kb_root, source_dir, context=f"{self.name} rebuild"
+            snapshot = scan_source_files(kb_root, source_dir)
+            source_snapshots.append(snapshot)
+            source_entries, source_skipped = _read_valid_entries_from_files(
+                kb_root,
+                source_dir,
+                snapshot.files,
+                context=f"{self.name} rebuild",
             )
             entries.extend(source_entries)
             skipped += source_skipped
+        freshness = _combine_freshness(snapshot.freshness for snapshot in source_snapshots)
 
         temp_path = self.db_path.with_name(f".{self.db_path.name}.{uuid.uuid4().hex}.tmp")
         try:
             with closing(sqlite3.connect(temp_path)) as connection:
                 _create_schema(connection)
                 connection.execute(
-                    "INSERT INTO index_meta(name, status, indexed_at) VALUES (?, ?, ?)",
-                    (self.name, "ready", datetime.now(UTC).isoformat()),
+                    """
+                    INSERT INTO index_meta(
+                        name, status, indexed_at, scanned_count, max_mtime_ns
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        self.name,
+                        "ready",
+                        datetime.now(UTC).isoformat(),
+                        freshness.scanned_count,
+                        freshness.max_mtime_ns,
+                    ),
                 )
                 connection.executemany(
                     """
@@ -99,6 +146,41 @@ class SQLiteMetadataIndex:
             indexed_entries=len(entries),
             skipped_files=skipped,
             status="ready",
+        )
+
+    def freshness_status(self, kb_root: Path) -> IndexFreshnessStatus:
+        if not self.db_path.is_file():
+            raise IndexUnavailable(f"index is not built: {self.name}")
+        current = current_freshness(kb_root, self.source_dirs)
+        try:
+            with closing(sqlite3.connect(self.db_path)) as connection:
+                columns = _table_columns(connection, "index_meta")
+                if not {"scanned_count", "max_mtime_ns"}.issubset(columns):
+                    return IndexFreshnessStatus(
+                        supported=False,
+                        stale=False,
+                        current=current,
+                        indexed=None,
+                        reason="index_meta freshness columns missing",
+                    )
+                row = connection.execute(
+                    """
+                    SELECT scanned_count, max_mtime_ns
+                    FROM index_meta
+                    WHERE name = ?
+                    """,
+                    (self.name,),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise IndexUnavailable(f"index is unreadable: {self.name}") from exc
+        if row is None:
+            raise IndexUnavailable(f"index metadata missing: {self.name}")
+        indexed = IndexFreshness(scanned_count=int(row[0]), max_mtime_ns=int(row[1]))
+        return IndexFreshnessStatus(
+            supported=True,
+            stale=indexed != current,
+            current=current,
+            indexed=indexed,
         )
 
     def read_entries(self, kb_root: Path) -> list[IndexedEntry]:
@@ -146,7 +228,9 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS index_meta(
             name TEXT PRIMARY KEY,
             status TEXT NOT NULL,
-            indexed_at TEXT NOT NULL
+            indexed_at TEXT NOT NULL,
+            scanned_count INTEGER NOT NULL,
+            max_mtime_ns INTEGER NOT NULL
         )
         """
     )
@@ -173,15 +257,21 @@ def read_valid_entries_from_source(
     *,
     context: str,
 ) -> tuple[list[IndexedEntry], int]:
-    directory = _safe_source_dir(kb_root, source_dir)
-    if not directory.exists():
-        return [], 0
+    snapshot = scan_source_files(kb_root, source_dir)
+    return _read_valid_entries_from_files(kb_root, source_dir, snapshot.files, context=context)
+
+
+def _read_valid_entries_from_files(
+    kb_root: Path,
+    source_dir: str,
+    files: tuple[SourceFile, ...],
+    *,
+    context: str,
+) -> tuple[list[IndexedEntry], int]:
     entries: list[IndexedEntry] = []
     skipped = 0
-    for path in sorted(directory.glob("*.md")):
-        if not path.is_file():
-            continue
-        item = read_valid_entry_file(kb_root, source_dir, path, context=context)
+    for source_file in files:
+        item = read_valid_entry_file(kb_root, source_dir, source_file.path, context=context)
         if item is None:
             skipped += 1
             continue
@@ -237,3 +327,46 @@ def _safe_source_dir(kb_root: Path, source_dir: str) -> Path:
     if not directory.is_relative_to(root):
         raise ValueError(f"index source dir escapes kb root: {source_dir}")
     return directory
+
+
+def scan_source_files(kb_root: Path, source_dir: str) -> SourceSnapshot:
+    directory = _safe_source_dir(kb_root, source_dir)
+    if not directory.exists():
+        return SourceSnapshot(files=(), freshness=IndexFreshness(0, 0))
+    files: list[SourceFile] = []
+    with os.scandir(directory) as iterator:
+        for entry in iterator:
+            if not entry.name.endswith(".md"):
+                continue
+            try:
+                if not entry.is_file(follow_symlinks=True):
+                    continue
+                stat_result = entry.stat(follow_symlinks=True)
+            except OSError:
+                files.append(SourceFile(Path(entry.path), 0))
+                continue
+            files.append(SourceFile(Path(entry.path), stat_result.st_mtime_ns))
+    files.sort(key=lambda item: item.path.name)
+    freshness = IndexFreshness(
+        scanned_count=len(files),
+        max_mtime_ns=max((item.mtime_ns for item in files), default=0),
+    )
+    return SourceSnapshot(files=tuple(files), freshness=freshness)
+
+
+def current_freshness(kb_root: Path, source_dirs: tuple[str, ...]) -> IndexFreshness:
+    snapshots = [scan_source_files(kb_root, source_dir).freshness for source_dir in source_dirs]
+    return _combine_freshness(snapshots)
+
+
+def _combine_freshness(freshnesses: Iterable[IndexFreshness]) -> IndexFreshness:
+    items = list(freshnesses)
+    return IndexFreshness(
+        scanned_count=sum(item.scanned_count for item in items),
+        max_mtime_ns=max((item.max_mtime_ns for item in items), default=0),
+    )
+
+
+def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {str(row[1]) for row in rows}

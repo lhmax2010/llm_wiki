@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
@@ -69,6 +70,103 @@ def test_index_rebuild_keeps_previous_sqlite_when_temp_build_fails(
 
     assert service.human_index.indexed_paths() == ["entries/KB-2026-0001.md"]
     assert [path.name for path in (kb_root / "indexes" / "human_search_index").glob("*.tmp")] == []
+
+
+def test_index_rebuild_records_freshness_metadata_for_all_md_files(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    _write_payload(
+        kb_root,
+        "entries",
+        entry_payload(
+            entry_id="KB-2026-0001",
+            trust_state="published",
+            title="freshness visible",
+        ),
+    )
+    invalid_path = kb_root / "entries" / "invalid.md"
+    invalid_path.write_text("not an entry\n", encoding="utf-8")
+    expected_max_mtime_ns = max(
+        (kb_root / "entries" / "KB-2026-0001.md").stat().st_mtime_ns,
+        invalid_path.stat().st_mtime_ns,
+    )
+
+    result = service.rebuild_human_index()
+
+    assert result.indexed_entries == 1
+    assert result.skipped_files == 1
+    with closing(sqlite3.connect(service.human_index.db_path)) as connection:
+        row = connection.execute(
+            "SELECT scanned_count, max_mtime_ns FROM index_meta WHERE name = ?",
+            ("human_search_index",),
+        ).fetchone()
+    assert row == (2, expected_max_mtime_ns)
+    status = service.human_index.freshness_status(kb_root)
+    assert status.supported is True
+    assert status.stale is False
+    assert status.indexed is not None
+    assert status.indexed.scanned_count == 2
+    assert status.current.scanned_count == 2
+
+
+def test_index_freshness_detects_changed_file_mtime(tmp_path: Path) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    _write_payload(
+        kb_root,
+        "entries",
+        entry_payload(
+            entry_id="KB-2026-0001",
+            trust_state="published",
+            title="mtime visible",
+        ),
+    )
+    path = kb_root / "entries" / "KB-2026-0001.md"
+    service.rebuild_human_index()
+    assert service.human_index.freshness_status(kb_root).stale is False
+
+    updated_mtime_ns = path.stat().st_mtime_ns + 1_000_000_000
+    os.utime(path, ns=(updated_mtime_ns, updated_mtime_ns))
+
+    status = service.human_index.freshness_status(kb_root)
+    assert status.supported is True
+    assert status.stale is True
+    assert status.indexed is not None
+    assert status.current.max_mtime_ns > status.indexed.max_mtime_ns
+
+
+def test_old_index_schema_reports_freshness_unsupported_without_failing(
+    tmp_path: Path,
+) -> None:
+    kb_root = tmp_path / "kb"
+    db_path = kb_root / "indexes" / "legacy" / "metadata.sqlite"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(db_path)) as connection:
+        connection.execute(
+            "CREATE TABLE index_meta("
+            "name TEXT PRIMARY KEY, status TEXT NOT NULL, indexed_at TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO index_meta(name, status, indexed_at) VALUES (?, ?, ?)",
+            ("legacy_index", "ready", "2026-06-16T00:00:00+00:00"),
+        )
+        connection.execute(
+            "CREATE TABLE entries("
+            "id TEXT PRIMARY KEY, path TEXT NOT NULL, source_dir TEXT NOT NULL)"
+        )
+        connection.commit()
+    index = SQLiteMetadataIndex(
+        name="legacy_index",
+        db_path=db_path,
+        source_dirs=("entries",),
+    )
+
+    status = index.freshness_status(kb_root)
+
+    assert status.supported is False
+    assert status.stale is False
+    assert status.indexed is None
+    assert status.reason == "index_meta freshness columns missing"
 
 
 def test_agent_index_rebuild_rejects_symlink_escape_to_research(
