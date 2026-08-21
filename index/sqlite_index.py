@@ -196,13 +196,14 @@ class SQLiteMetadataIndex:
         pushdown_filters = _pushdown_filters(scope or {}) if allow_pushdown else {}
         use_pushdown = False
         if pushdown_filters:
-            use_pushdown = self._can_push_down(kb_root)
-            if use_pushdown and self._is_stale(kb_root):
+            pushdown_status = self._pushdown_status(kb_root)
+            if pushdown_status is not None and pushdown_status.supported and pushdown_status.stale:
                 LOGGER.warning(
                     "%s is stale; falling back to full source scan for scoped search",
                     self.name,
                 )
                 return self._read_source_entries(kb_root)
+            use_pushdown = pushdown_status is not None and pushdown_status.supported
             if not use_pushdown:
                 LOGGER.warning(
                     "%s cannot push down scoped search; falling back to full source scan",
@@ -233,7 +234,7 @@ class SQLiteMetadataIndex:
                 entries.append(item)
         return entries
 
-    def _can_push_down(self, kb_root: Path) -> bool:
+    def _pushdown_status(self, kb_root: Path) -> IndexFreshnessStatus | None:
         try:
             with closing(sqlite3.connect(self.db_path)) as connection:
                 entries_columns = _table_columns(connection, "entries")
@@ -243,16 +244,11 @@ class SQLiteMetadataIndex:
         has_filter_columns = {"module", "entry_type"}.issubset(entries_columns)
         has_freshness_columns = {"scanned_count", "max_mtime_ns"}.issubset(meta_columns)
         if not has_filter_columns or not has_freshness_columns:
-            return False
+            return None
         try:
-            status = self.freshness_status(kb_root)
+            return self.freshness_status(kb_root)
         except ValueError as exc:
             raise IndexUnavailable(f"invalid index source dir: {self.name}") from exc
-        return status.supported
-
-    def _is_stale(self, kb_root: Path) -> bool:
-        status = self.freshness_status(kb_root)
-        return status.stale
 
     def _read_source_entries(self, kb_root: Path) -> list[IndexedEntry]:
         entries: list[IndexedEntry] = []
@@ -376,7 +372,10 @@ def _safe_source_dir(kb_root: Path, source_dir: str) -> Path:
     if "/" in source_dir or "\\" in source_dir or source_dir in {"", ".", ".."}:
         raise ValueError(f"invalid index source dir: {source_dir}")
     root = kb_root.resolve()
-    directory = (root / source_dir).resolve()
+    candidate = root / source_dir
+    if candidate.is_symlink():
+        raise ValueError(f"index source dir must not be a symlink: {source_dir}")
+    directory = candidate.resolve()
     if not directory.is_relative_to(root):
         raise ValueError(f"index source dir escapes kb root: {source_dir}")
     return directory

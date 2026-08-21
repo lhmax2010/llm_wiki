@@ -55,6 +55,22 @@
   today but should be simplified alongside the bootstrap so the docs and the
   scripts agree on one invocation style.
 
+## Search Index L2 Follow-Ups
+
+- [ ] Add an explicit note/diagnostic that scoped search on a stale index falls
+  back to full source scan, so latency can temporarily be worse than a fresh
+  pushdown path. L2 keeps this log-only to avoid changing Web/MCP response
+  contracts.
+- [ ] Add dedicated `include_pending=True` scoped-search coverage. L2 only
+  pushes down published `entries/`; pending `staging/` candidates stay on the
+  Python filter path.
+- [ ] Parameterize L2 pushdown/freshness tests across human and agent indexes.
+  Current coverage uses the agent path for most correctness tests because both
+  indexes share `SQLiteMetadataIndex`.
+- [ ] Clean up L2 naming and small redundancies: clarify `SourceSnapshot`
+  freshness naming, trim redundant supported checks, and consider surfacing the
+  stale/fallback `reason` internally for future diagnostics.
+
 ## Credibility Integrity
 
 - [ ] Structured evidence entry UI for the Web edit form. PR #17 made the edit

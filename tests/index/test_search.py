@@ -9,12 +9,11 @@ from typing import Any
 import pytest
 
 import index.search as search_module
-import index.sqlite_index as sqlite_index_module
 from core.models import Entry, EntryType
 from core.storage import read_entry, write_entry
 from core.validation import headings_for_entry_type
 from index.search import SearchService
-from index.sqlite_index import IndexUnavailable, SQLiteMetadataIndex, read_valid_entry_file
+from index.sqlite_index import IndexUnavailable, SQLiteMetadataIndex
 from index.types import SearchResult, SearchScope
 from research.store import ResearchRecord, write_research_record
 from tests.governed_api.helpers import body_for, entry_payload
@@ -198,6 +197,25 @@ def test_agent_index_rebuild_rejects_symlink_escape_to_research(
     assert "outside source dir" in caplog.text
 
 
+@pytest.mark.parametrize("target_dir", ["research", "staging", "deprecated"])
+def test_agent_index_rebuild_rejects_source_directory_symlink(
+    tmp_path: Path,
+    target_dir: str,
+) -> None:
+    kb_root = tmp_path / "kb"
+    service = SearchService(kb_root)
+    target = kb_root / target_dir
+    target.mkdir(parents=True, exist_ok=True)
+    link_path = kb_root / "entries"
+    try:
+        link_path.symlink_to(target, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink creation is unavailable on this filesystem: {exc}")
+
+    with pytest.raises(ValueError, match="index source dir must not be a symlink"):
+        service.rebuild_agent_index()
+
+
 def test_agent_index_rebuild_skips_entry_with_wrong_trust_state(tmp_path: Path) -> None:
     kb_root = tmp_path / "kb"
     service = SearchService(kb_root)
@@ -373,6 +391,13 @@ def test_stale_scoped_search_falls_back_to_source_scan_and_warns(
     )
     payload["module"] = "decoder"
     _write_payload(kb_root, "entries", payload)
+    other = entry_payload(
+        entry_id="KB-2026-0002",
+        trust_state="published",
+        title="stale-token still decoder",
+    )
+    other["module"] = "decoder"
+    _write_payload(kb_root, "entries", other)
     path = kb_root / "entries" / "KB-2026-0001.md"
     service.rebuild_agent_index()
     old_mtime_ns = path.stat().st_mtime_ns
@@ -405,6 +430,8 @@ def test_python_scope_recheck_prevents_stale_pushdown_false_positive(tmp_path: P
         payload["module"] = "photo"
         _write_payload(kb_root, "entries", payload)
     service.rebuild_agent_index()
+    stale_path = kb_root / "entries" / "KB-2026-0001.md"
+    old_mtime_ns = stale_path.stat().st_mtime_ns
 
     stale_payload = entry_payload(
         entry_id="KB-2026-0001",
@@ -412,45 +439,18 @@ def test_python_scope_recheck_prevents_stale_pushdown_false_positive(tmp_path: P
         title="subset-token shared",
     )
     stale_payload["module"] = "audio"
-    stale_path = kb_root / "entries" / "KB-2026-0001.md"
     write_entry(stale_path, Entry.model_validate(stale_payload))
+    os.utime(stale_path, ns=(old_mtime_ns, old_mtime_ns))
+    assert service.agent_index.freshness_status(kb_root).stale is False
 
-    with closing(sqlite3.connect(service.agent_index.db_path)) as connection:
-        connection.row_factory = sqlite3.Row
-        rows = sqlite_index_module._select_entry_rows(connection, {"module": "photo"})
-    stale_candidates = []
-    for row in rows:
-        item = read_valid_entry_file(
-            kb_root,
-            str(row["source_dir"]),
-            kb_root / str(row["path"]),
-            context="stale pushdown simulation",
-        )
-        assert item is not None
-        stale_candidates.append(item.entry)
-
-    stale_sql_results = search_module._search_entries(
-        stale_candidates,
-        kb_root=kb_root,
-        query="subset-token",
+    results = service.search_agent(
+        "subset-token",
         scope={"module": "photo"},
         expand_synonyms=False,
-        limit=20,
-        offset=0,
-        sort="score",
-    )
-    python_results = _indexed_search(
-        service,
-        scope={"module": "photo"},
-        allow_pushdown=False,
-        query="subset-token",
     )
 
-    assert {result["id"] for result in stale_sql_results}.issubset(
-        {result["id"] for result in python_results}
-    )
-    assert all(result["module"] == "photo" for result in stale_sql_results)
-    assert [result["id"] for result in stale_sql_results] == ["KB-2026-0002"]
+    assert [result["id"] for result in results] == ["KB-2026-0002"]
+    assert all(result["module"] == "photo" for result in results)
 
 
 def test_old_index_schema_scoped_search_falls_back_to_source_scan(tmp_path: Path) -> None:
