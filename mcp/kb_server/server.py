@@ -10,24 +10,41 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from governed_api.roles import load_roles_config
+from pydantic import ValidationError
 
 from core.id_allocator import IDAllocator
 from mcp.kb_server.handlers import MCPHandlers, ToolError
+from mcp.kb_server.schemas import TOOL_ARGS, input_schema_for
 from mcp.kb_server.types import ToolCallResult, ToolDescriptor
 
 LOGGER = logging.getLogger(__name__)
 
 
+class InvalidParamsError(Exception):
+    """Raised when a tool call fails MCP argument validation."""
+
+    def __init__(self, message: str, data: object | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.data = data
+
+
+TOOL_DESCRIPTIONS = {
+    "search_kb": (
+        "Search published KB entries. Pass scope.module or scope.entry_type to "
+        "restrict the search instead of filtering the results yourself."
+    ),
+    "get_entry": "Get one KB entry by id.",
+    "list_categories": "List modules, entry types, tags, and error codes.",
+    "browse": "Browse entries by module and optional entry type.",
+    "propose_entry": "Propose a new KB entry through the Governed API pipeline.",
+    "propose_update": "Propose an update through the Governed API pipeline.",
+    "search_research_for_hints": "Return opt-in research hints; P3 stub returns none.",
+}
+
+
 def tool_descriptors() -> list[ToolDescriptor]:
-    return [
-        _tool("search_kb", "Search published KB entries."),
-        _tool("get_entry", "Get one KB entry by id."),
-        _tool("list_categories", "List modules, entry types, tags, and error codes."),
-        _tool("browse", "Browse entries by module and optional entry type."),
-        _tool("propose_entry", "Propose a new KB entry through the Governed API pipeline."),
-        _tool("propose_update", "Propose an update through the Governed API pipeline."),
-        _tool("search_research_for_hints", "Return opt-in research hints; P3 stub returns none."),
-    ]
+    return [_tool(name, description) for name, description in TOOL_DESCRIPTIONS.items()]
 
 
 def run_stdio_server(
@@ -73,6 +90,8 @@ def handle_jsonrpc_line(handlers: MCPHandlers, line: str) -> dict[str, Any] | No
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
     except json.JSONDecodeError as exc:
         return _error_response(request_id, -32700, f"parse error: {exc.msg}")
+    except InvalidParamsError as exc:
+        return _error_response(request_id, -32602, exc.message, exc.data)
     except ToolError as exc:
         return _error_response(request_id, -32000, exc.message, exc.to_dict())
     except (TypeError, ValueError, KeyError) as exc:
@@ -117,15 +136,41 @@ def _call_tool(handlers: MCPHandlers, params: dict[str, Any]) -> ToolCallResult:
     }
     if name not in dispatch:
         raise ToolError("E_SCHEMA", f"unknown tool: {name}", "name")
-    payload = dispatch[name](**arguments)
+    # Validate here, not just in the advertised schema. Nothing in the MCP
+    # protocol makes a client enforce inputSchema, so a server that only
+    # declares its arguments still accepts a misspelled scope key and answers
+    # with a wider result set than the caller asked for.
+    validated = _validate_arguments(name, arguments)
+    payload = dispatch[name](**validated)
     return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
+
+
+def _validate_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return TOOL_ARGS[name].model_validate(arguments).to_kwargs()
+    except ValidationError as exc:
+        message = _format_validation_error(name, exc)
+        raise InvalidParamsError(
+            message,
+            {"code": "E_SCHEMA", "field": "arguments", "message": message},
+        ) from exc
+
+
+def _format_validation_error(name: str, exc: ValidationError) -> str:
+    """Say which key was wrong and, for a stray key, what was allowed instead."""
+    problems = []
+    for error in exc.errors():
+        location = ".".join(str(part) for part in error["loc"]) or "(root)"
+        problems.append(f"{location}: {error['msg']}")
+    detail = "; ".join(problems)
+    return f"invalid arguments for {name}: {detail}"
 
 
 def _tool(name: str, description: str) -> ToolDescriptor:
     return {
         "name": name,
         "description": description,
-        "inputSchema": {"type": "object", "additionalProperties": True},
+        "inputSchema": input_schema_for(TOOL_ARGS[name]),
     }
 
 
